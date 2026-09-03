@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Musica</title>
+  <link rel="stylesheet" href="/css/common-page.css">
+  <link rel="stylesheet" href="/css/films.css">
+  <link rel="stylesheet" href="/css/music.css">
+  <script src="/js/api-config.js" defer></script>
+  <script src="/js/shell-bridge.js" defer></script>
+  <script src="/js/music-playlist-state.js" defer></script>
+  <script src="/js/music.js" defer></script>
+</head>
+<body>
+  <main class="films-page music-page">
+    <div id="browseView" class="films-browse-view music-browse-view">
+      <header class="films-header music-header">
+        <h1 id="pageTitle" class="films-title">Musica</h1>
+
+        <div class="music-global-search" role="search">
+          <span class="search-icon" aria-hidden="true"></span>
+          <label class="sr-only" for="searchInput">Cerca brani, album, artisti e generi</label>
+          <input id="searchInput" type="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+          <button id="searchClearButton" class="music-search-clear" type="button" aria-label="Cancella ricerca" title="Cancella ricerca" hidden></button>
+        </div>
+
+        <nav class="films-navigation" aria-label="Navigazione Musica">
+          <button id="homeButton" class="nav-button active" type="button">Home</button>
+          <button id="albumsButton" class="nav-button" type="button">Album</button>
+          <button id="artistsButton" class="nav-button" type="button">Artisti</button>
+
+          <button id="genreButton" class="nav-button" type="button">Generi</button>
+        </nav>
+      </header>
+
+      <section id="searchView" class="search-view music-search-view" hidden>
+        <div class="music-search-status" aria-live="polite">
+          <span id="searchCount" class="search-count"></span>
+        </div>
+        <div id="searchEmpty" class="view-empty" hidden>Nessun risultato.</div>
+        <div id="searchResults" class="music-search-results"></div>
+      </section>
+
+      <section id="homeView" class="home-view music-home-view">
+        <section class="music-shortcuts" aria-label="Sezioni principali Musica">
+          <button class="music-shortcut" type="button" data-music-section="playlists">
+            <span class="music-shortcut-icon music-icon-playlists" aria-hidden="true"></span>
+            <strong>Playlist</strong>
+          </button>
+          <button class="music-shortcut" type="button" data-music-section="favorites">
+            <span class="music-shortcut-icon music-icon-favorites" aria-hidden="true"></span>
+            <strong>Preferiti</strong>
+          </button>
+        </section>
+
+        <p id="librarySummary" class="music-library-summary" aria-live="polite"></p>
+
+        <section class="showcase-section music-showcase">
+          <div class="section-heading"><h2>Riprodotti di recente</h2></div>
+          <div class="showcase-shell">
+            <button class="rail-arrow rail-arrow-left" type="button" data-scroll-target="recentRail" data-direction="-1" aria-label="Scorri a sinistra"><span class="film-icon chevron-left-icon" aria-hidden="true"></span></button>
+            <div id="recentRail" class="poster-rail music-rail"></div>
+            <button class="rail-arrow rail-arrow-right" type="button" data-scroll-target="recentRail" data-direction="1" aria-label="Scorri a destra"><span class="film-icon chevron-right-icon" aria-hidden="true"></span></button>
+          </div>
+          <div id="recentEmpty" class="rail-empty" hidden> </div>
+        </section>
+
+        <section class="showcase-section music-showcase">
+          <div class="section-heading"><h2>Ultimi arrivi</h2></div>
+          <div class="showcase-shell">
+            <button class="rail-arrow rail-arrow-left" type="button" data-scroll-target="latestRail" data-direction="-1" aria-label="Scorri gli ultimi arrivi a sinistra"><span class="film-icon chevron-left-icon" aria-hidden="true"></span></button>
+            <div id="latestRail" class="poster-rail music-rail"></div>
+            <button class="rail-arrow rail-arrow-right" type="button" data-scroll-target="latestRail" data-direction="1" aria-label="Scorri gli ultimi arrivi a destra"><span class="film-icon chevron-right-icon" aria-hidden="true"></span></button>
+          </div>
+          <div id="latestEmpty" class="rail-empty" hidden> </div>
+        </section>
+
+        <section class="showcase-section music-showcase">
+          <div class="section-heading"><h2>Per te</h2></div>
+          <div class="showcase-shell">
+            <button class="rail-arrow rail-arrow-left" type="button" data-scroll-target="recommendedRail" data-direction="-1" aria-label="Scorri a sinistra"><span class="film-icon chevron-left-icon" aria-hidden="true"></span></button>
+            <div id="recommendedRail" class="poster-rail music-rail"></div>
+            <button class="rail-arrow rail-arrow-right" type="button" data-scroll-target="recommendedRail" data-direction="1" aria-label="Scorri a destra"><span class="film-icon chevron-right-icon" aria-hidden="true"></span></button>
+          </div>
+          <div id="recommendedEmpty" class="rail-empty" hidden> </div>
+        </section>
+      </section>
+
+      <section id="catalogView" class="catalog-view music-catalog-view" hidden>
+        <div class="catalog-summary music-catalog-summary">
+          <span id="catalogCount"></span>
+          <div class="music-catalog-actions">
+            <button id="newPlaylistButton" class="music-secondary-action" type="button" hidden>Nuova playlist</button>
+            <button id="clearGenreButton" class="active-filter" type="button" hidden></button>
+          </div>
+        </div>
+        <div id="catalogEmpty" class="view-empty" hidden></div>
+        <div id="catalogGrid" class="music-grid"></div>
+        <div id="trackList" class="music-track-list" hidden></div>
+        <div id="genreGrid" class="music-genre-grid" hidden></div>
+      </section>
+    </div>
+
+    <section id="albumDetailView" class="music-detail-view" hidden aria-label="Dettagli album">
+      <button id="albumBackButton" class="music-detail-back" type="button">
+        <span class="film-icon chevron-left-icon" aria-hidden="true"></span>
+        Indietro
+      </button>
+      <div class="music-detail-heading">
+        <div id="albumDetailCover" class="music-detail-cover" aria-hidden="true"></div>
+        <div class="music-detail-copy">
+          <span class="music-detail-kicker">Album</span>
+          <h1 id="albumDetailTitle">—</h1>
+          <button id="albumDetailArtist" class="music-link-button" type="button">—</button>
+          <p id="albumDetailMeta"></p>
+          <div class="music-detail-actions">
+            <button id="albumFavoriteButton" class="music-favorite-action" type="button">
+              <span class="music-favorite-action-icon" aria-hidden="true"></span>
+              <span id="albumFavoriteLabel">Aggiungi album ai preferiti</span>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div id="albumTrackList" class="music-track-list music-detail-tracks"></div>
+    </section>
+
+    <section id="artistDetailView" class="music-detail-view" hidden aria-label="Dettagli artista">
+      <button id="artistBackButton" class="music-detail-back" type="button">
+        <span class="film-icon chevron-left-icon" aria-hidden="true"></span>
+        Indietro
+      </button>
+      <header class="music-artist-heading">
+        <span class="music-detail-kicker">Artista</span>
+        <h1 id="artistDetailName">—</h1>
+        <p id="artistDetailMeta"></p>
+      </header>
+      <section class="showcase-section">
+        <div class="section-heading"><h2>Album</h2></div>
+        <div id="artistAlbumGrid" class="music-grid"></div>
+      </section>
+      <section class="showcase-section">
+        <div class="section-heading"><h2>Brani</h2></div>
+        <div id="artistTrackList" class="music-track-list"></div>
+      </section>
+    </section>
+
+    <section id="playlistDetailView" class="music-detail-view" hidden aria-label="Dettagli playlist">
+      <button id="playlistBackButton" class="music-detail-back" type="button">
+        <span class="film-icon chevron-left-icon" aria-hidden="true"></span>
+        Indietro
+      </button>
+      <div class="music-detail-heading">
+        <div id="playlistDetailCover" class="music-detail-cover music-playlist-cover" aria-hidden="true"></div>
+        <div class="music-detail-copy">
+          <span class="music-detail-kicker">Playlist</span>
+          <h1 id="playlistDetailTitle">—</h1>
+          <p id="playlistDetailDescription"></p>
+          <p id="playlistDetailMeta"></p>
+          <div class="music-detail-actions music-playlist-detail-actions">
+            <button id="playlistPlayButton" class="music-primary-action" type="button">Riproduci</button>
+            <button id="playlistEditButton" class="music-secondary-action" type="button">Modifica</button>
+            <button id="playlistDeleteButton" class="music-danger-action" type="button">Elimina</button>
+          </div>
+        </div>
+      </div>
+      <div id="playlistTrackList" class="music-track-list music-detail-tracks"></div>
+      <div id="playlistDetailEmpty" class="view-empty" hidden>Questa playlist non contiene ancora brani.</div>
+    </section>
+
+    <dialog id="playlistEditorDialog" class="music-dialog">
+      <form id="playlistEditorForm" class="music-dialog-card">
+        <header>
+          <h2 id="playlistEditorTitle">Nuova playlist</h2>
+          <button class="music-dialog-close" type="button" data-close-dialog="playlistEditorDialog" aria-label="Chiudi"></button>
+        </header>
+        <label>
+          <span>Nome</span>
+          <input id="playlistNameInput" name="name" type="text" maxlength="100" required autocomplete="off">
+        </label>
+        <label>
+          <span>Descrizione</span>
+          <textarea id="playlistDescriptionInput" name="description" maxlength="500" rows="4"></textarea>
+        </label>
+        <footer>
+          <button class="music-secondary-action" type="button" data-close-dialog="playlistEditorDialog">Annulla</button>
+          <button id="playlistEditorSubmit" class="music-primary-action" type="submit">Crea playlist</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="addToPlaylistDialog" class="music-dialog">
+      <div class="music-dialog-card">
+        <header>
+          <div>
+            <h2>Aggiungi a playlist</h2>
+            <p id="addToPlaylistTrackTitle"></p>
+          </div>
+          <button class="music-dialog-close" type="button" data-close-dialog="addToPlaylistDialog" aria-label="Chiudi"></button>
+        </header>
+        <div id="addToPlaylistList" class="music-playlist-picker"></div>
+        <div id="addToPlaylistEmpty" class="view-empty" hidden>Non hai ancora creato playlist.</div>
+        <footer>
+          <button id="createPlaylistFromPickerButton" class="music-secondary-action" type="button">Nuova playlist</button>
+          <button class="music-secondary-action" type="button" data-close-dialog="addToPlaylistDialog">Chiudi</button>
+        </footer>
+      </div>
+    </dialog>
+
+    <div id="musicLoading" class="music-loading" role="status" hidden>
+      <img src="/assets/loading-cinghiale.gif" alt="" aria-hidden="true">
+      <span>Caricamento…</span>
+    </div>
+  </main>
+</body>
+</html>

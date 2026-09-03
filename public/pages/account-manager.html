@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Gestione account</title>
+  <link rel="stylesheet" href="/css/common-page.css">
+  <link rel="stylesheet" href="/css/account-manager.css">
+  <script src="/js/api-config.js" defer></script>
+  <script src="/js/shell-bridge.js" defer></script>
+  <script src="/js/account-manager.js" defer></script>
+</head>
+<body>
+  <main class="page accounts-page">
+    <header class="page-header accounts-header">
+      <div>
+        <p class="accounts-kicker">Amministrazione</p>
+        <h1 class="page-title">Gestione account</h1>
+      </div>
+      <div id="accountToolbar" class="toolbar">
+        <button id="refreshAccounts" class="action-button" type="button">Aggiorna</button>
+        <button id="newAccount" class="action-button primary" type="button">Nuovo account</button>
+      </div>
+      <div id="inviteToolbar" class="toolbar" hidden>
+        <button id="refreshInvites" class="action-button" type="button">Aggiorna inviti</button>
+        <button id="newInviteShortcut" class="action-button primary" type="button">Nuovo invito</button>
+      </div>
+      <div id="deviceToolbar" class="toolbar" hidden>
+        <button id="refreshDevices" class="action-button" type="button">Aggiorna dispositivi</button>
+      </div>
+    </header>
+
+    <nav class="manager-tabs" aria-label="Sezioni di amministrazione">
+      <button id="accountsTab" class="manager-tab active" type="button" aria-selected="true" aria-controls="accountsPanel">Account</button>
+      <button id="invitesTab" class="manager-tab" type="button" aria-selected="false" aria-controls="invitesPanel" hidden>Gestione Inviti</button>
+      <button id="devicesTab" class="manager-tab" type="button" aria-selected="false" aria-controls="devicesPanel" hidden>Gestione dispositivi</button>
+    </nav>
+
+    <p id="pageMessage" class="accounts-message" role="status" aria-live="polite"></p>
+
+    <section id="accountsPanel" aria-labelledby="accountsTab">
+      <div class="accounts-layout">
+        <aside class="accounts-browser" aria-label="Elenco account">
+          <div class="accounts-browser-heading">
+            <div>
+              <h2>Account</h2>
+              <span id="accountCount">0 account</span>
+            </div>
+            <input id="accountSearch" class="account-search" type="search" placeholder="Cerca account" autocomplete="off" spellcheck="false">
+          </div>
+          <div id="accountList" class="account-list" role="list"></div>
+          <div id="accountEmpty" class="account-empty" hidden>Nessun account corrisponde alla ricerca.</div>
+        </aside>
+
+        <section class="account-editor" aria-live="polite">
+          <div id="editorContent" hidden>
+            <header class="editor-heading">
+              <div>
+                <p id="editorEyebrow" class="editor-eyebrow">Account</p>
+                <h2 id="editorTitle">Nuovo account</h2>
+                <p id="editorSubtitle">Configura identità, ruolo e sezioni.</p>
+              </div>
+              <span id="editorStatus" class="account-status" hidden></span>
+            </header>
+
+            <form id="accountForm" class="account-form" autocomplete="off" novalidate>
+              <div class="form-grid">
+                <label class="form-field form-field-wide">
+                  <span>Username</span>
+                  <input id="username" type="text" minlength="3" maxlength="64" required autocomplete="off" spellcheck="false">
+                </label>
+
+                <label class="form-field">
+                  <span>Ruolo</span>
+                  <select id="role" required>
+                    <option value="user">Utente</option>
+                    <option value="admin">Amministratore</option>
+                  </select>
+                </label>
+
+                <label id="disabledField" class="switch-field">
+                  <input id="disabled" type="checkbox">
+                  <span>
+                    <strong>Account disabilitato</strong>
+                    <small>Impedisce il login senza revocare i dispositivi.</small>
+                  </span>
+                </label>
+              </div>
+
+              <fieldset class="sections-fieldset">
+                <legend>Sezioni visibili</legend>
+                <p id="sectionsHint">Seleziona i cataloghi disponibili per questo account.</p>
+                <div id="sectionChoices" class="section-choices">
+                  <label><input type="checkbox" value="films"> <span>Film</span></label>
+                  <label><input type="checkbox" value="series"> <span>Serie</span></label>
+                  <label><input type="checkbox" value="music"> <span>Musica</span></label>
+                  <label><input type="checkbox" value="books"> <span>Libri</span></label>
+                  <label><input type="checkbox" value="comics"> <span>Fumetti</span></label>
+                  <label><input type="checkbox" value="manga"> <span>Manga</span></label>
+                </div>
+              </fieldset>
+
+              <section id="initialPasswordSection" class="security-card">
+                <div>
+                  <h3>Password iniziale</h3>
+                  <p>La password non viene mai mostrata nuovamente né salvata nel frontend.</p>
+                </div>
+                <div class="form-grid">
+                  <label class="form-field form-field-wide">
+                    <span>Password</span>
+                    <input id="initialPassword" type="password" minlength="10" autocomplete="new-password">
+                  </label>
+                  <label class="form-field form-field-wide">
+                    <span>Conferma password</span>
+                    <input id="initialPasswordConfirm" type="password" minlength="10" autocomplete="new-password">
+                  </label>
+                </div>
+                <label class="check-field">
+                  <input id="initialMustChange" type="checkbox" checked>
+                  <span>Richiedi il cambio password al primo accesso</span>
+                </label>
+              </section>
+
+              <div class="form-actions">
+                <button id="cancelEdit" class="action-button" type="button">Annulla</button>
+                <button id="saveAccount" class="action-button primary" type="submit">Crea account</button>
+              </div>
+            </form>
+
+            <section id="existingAccountSecurity" class="existing-security" hidden>
+              <div class="security-card">
+                <div class="security-heading">
+                  <div>
+                    <h3>Reimposta password</h3>
+                    <p>La nuova password disconnette tutti i dispositivi collegati all’account.</p>
+                  </div>
+                </div>
+                <form id="passwordResetForm" class="password-reset-form" autocomplete="off">
+                  <label class="form-field">
+                    <span>Nuova password</span>
+                    <input id="resetPassword" type="password" minlength="10" autocomplete="new-password" required>
+                  </label>
+                  <label class="form-field">
+                    <span>Conferma password</span>
+                    <input id="resetPasswordConfirm" type="password" minlength="10" autocomplete="new-password" required>
+                  </label>
+                  <label class="check-field password-change-check">
+                    <input id="resetMustChange" type="checkbox" checked>
+                    <span>Richiedi un nuovo cambio al prossimo accesso</span>
+                  </label>
+                  <button id="resetPasswordSubmit" class="action-button" type="submit">Reimposta password</button>
+                </form>
+                <p id="selfPasswordNotice" class="self-notice" hidden>Per cambiare la password del tuo account usa la pagina Profilo.</p>
+              </div>
+
+              <div class="security-card account-sessions-card">
+                <div>
+                  <h3>Dispositivi collegati</h3>
+                  <p id="activeDevicesText">Nessun dispositivo con sessione valida.</p>
+                </div>
+                <button id="logoutDevices" class="action-button" type="button">Disconnetti tutti</button>
+              </div>
+
+              <div class="danger-card">
+                <div>
+                  <h3>Elimina account</h3>
+                </div>
+                <button id="deleteAccount" class="danger-button" type="button">Elimina account</button>
+              </div>
+            </section>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="invitesPanel" class="invites-panel" aria-labelledby="invitesTab" hidden>
+      <div class="invites-layout">
+        <section id="inviteCreateCard" class="invite-create-card">
+          <header class="invite-section-heading">
+            <div>
+              <p class="editor-eyebrow">Pairing</p>
+              <h2>Nuovo invito dispositivo</h2>
+            </div>
+          </header>
+
+          <form id="inviteForm" class="invite-form" autocomplete="off">
+            <label class="form-field">
+              <span>Durata in minuti</span>
+              <input id="inviteTtlMinutes" type="number" min="1" max="1440" step="1" value="15" required inputmode="numeric">
+              <small>Da 1 minuto a 24 ore.</small>
+            </label>
+            <button id="createInvite" class="action-button primary" type="submit">Crea invito</button>
+          </form>
+
+          <section id="createdInvitePanel" class="created-invite-panel" aria-live="polite" hidden>
+            <div class="created-invite-heading">
+              <div>
+                <p class="created-invite-label">Invito creato</p>
+                <h3>Conserva subito questo invito</h3>
+              </div>
+              <button id="dismissCreatedInvite" class="icon-text-button" type="button">Chiudi</button>
+            </div>
+            <code id="createdInviteToken" class="created-invite-token"></code>
+            <div class="created-invite-footer">
+              <p id="createdInviteExpiry"></p>
+              <button id="copyCreatedInvite" class="action-button" type="button">Copia invito</button>
+            </div>
+          </section>
+        </section>
+
+        <section class="invite-history-card">
+          <header class="invite-history-heading">
+            <div>
+              <p class="editor-eyebrow">Cronologia</p>
+              <h2>Gestione Inviti</h2>
+              <p id="inviteCount">0 inviti</p>
+            </div>
+            <label class="invite-filter">
+              <span>Stato</span>
+              <select id="inviteStatusFilter">
+                <option value="all">Tutti</option>
+                <option value="active">Attivi</option>
+                <option value="used">Usati</option>
+                <option value="expired">Scaduti</option>
+                <option value="revoked">Revocati</option>
+              </select>
+            </label>
+          </header>
+          <div id="inviteList" class="invite-list" role="list"></div>
+          <div id="inviteEmpty" class="account-empty" hidden>Nessun invito corrisponde al filtro selezionato.</div>
+          <div class="invite-load-more-wrap">
+            <button id="inviteLoadMore" class="action-button invite-load-more" type="button" hidden>Carica altro</button>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="devicesPanel" class="devices-panel" aria-labelledby="devicesTab" hidden>
+      <section class="device-management-card">
+        <header class="device-management-heading">
+          <div>
+            <p class="editor-eyebrow">Pairing</p>
+            <h2>Gestione dispositivi</h2>
+            <p id="deviceCount">0 dispositivi</p>
+          </div>
+          <label class="device-filter">
+            <span>Stato</span>
+            <select id="deviceStatusFilter">
+              <option value="all">Tutti</option>
+              <option value="active">Attivi</option>
+              <option value="revoked">Revocati</option>
+            </select>
+          </label>
+        </header>
+
+        <div id="deviceList" class="device-list" role="list"></div>
+        <div id="deviceEmpty" class="account-empty" hidden>Nessun dispositivo corrisponde al filtro selezionato.</div>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

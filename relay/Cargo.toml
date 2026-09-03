@@ -1,0 +1,23 @@
+[package]
+name = "baia-relay"
+version = "0.1.0"
+description = "Baia Relay - protocollo di trasporto remoto v1"
+authors = ["Baia"]
+edition = "2021"
+
+[features]
+default = ["server-runtime"]
+async-io = ["dep:tokio"]
+server-runtime = ["async-io", "dep:rustls", "dep:tokio-rustls"]
+
+[dependencies]
+base64 = "0.22"
+ring = "0.17.14"
+rustls = { version = "=0.23.43", default-features = false, features = ["aws_lc_rs", "std"], optional = true }
+tokio = { version = "1.53.1", features = ["io-util", "net", "rt-multi-thread", "sync", "time"], optional = true }
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["aws_lc_rs"], optional = true }
+
+[[bin]]
+name = "baia-relay"
+path = "src/main.rs"
+required-features = ["server-runtime"]

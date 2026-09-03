@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Profilo</title>
+  <link rel="stylesheet" href="/css/common-page.css">
+  <script src="/js/api-config.js" defer></script>
+  <script src="/js/shell-bridge.js" defer></script>
+  <script src="/js/profile.js" defer></script>
+</head>
+<body>
+  <main class="page">
+    <header class="page-header profile-header">
+      <div>
+        <h1 class="page-title">Profilo</h1>
+      </div>
+      <button id="returnToLogin" class="action-button" type="button" hidden>Torna all’accesso</button>
+    </header>
+
+    <section id="accountCard" class="info-card">
+      <div class="section-heading">
+        <div>
+          <p class="section-kicker">Account</p>
+          <h2 id="accountHeading">Verifica account…</h2>
+        </div>
+        <span id="accountRoleBadge" class="role-badge" hidden></span>
+      </div>
+      <p id="accountMessage" class="card-message" role="status" aria-live="polite"></p>
+      <dl id="accountDetails" class="profile-details" hidden>
+        <dt>Username</dt><dd id="accountUsername">—</dd>
+        <dt>Ruolo</dt><dd id="accountRole">—</dd>
+        <dt>Sezioni abilitate</dt><dd id="accountSections">—</dd>
+        <dt>Accesso su dispositivo</dt><dd id="accountBinding">—</dd>
+      </dl>
+
+      <form id="passwordForm" class="password-form" autocomplete="off" hidden>
+        <h3 id="passwordHeading">Cambia password</h3>
+        <p id="passwordDescription">La modifica disconnetterà gli altri dispositivi collegati a questo account.</p>
+        <div id="currentPasswordField">
+          <label for="currentPassword">Password attuale</label>
+          <input id="currentPassword" name="currentPassword" type="password" autocomplete="current-password">
+        </div>
+        <label for="newPassword">Nuova password</label>
+        <input id="newPassword" name="newPassword" type="password" minlength="10" autocomplete="new-password" required>
+        <label for="confirmPassword">Conferma nuova password</label>
+        <input id="confirmPassword" name="confirmPassword" type="password" minlength="10" autocomplete="new-password" required>
+        <div class="account-actions">
+          <button id="passwordSubmit" class="action-button primary" type="submit">Salva password</button>
+          <button id="profileLogout" class="action-button danger" type="button">Esci dall’account</button>
+        </div>
+        <p id="passwordMessage" class="endpoint-message" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <section class="info-card device-card">
+      <div class="section-heading">
+        <div>
+          <p class="section-kicker">Dispositivo</p>
+          <h2>Identità e connessione</h2>
+        </div>
+      </div>
+      <dl class="profile-details">
+        <dt>Applicazione</dt><dd id="applicationName">—</dd>
+        <dt>Versione interfaccia</dt><dd id="uiVersion">—</dd>
+        <dt>Versione server</dt><dd id="serverVersion">—</dd>
+        <dt>Baia Core</dt><dd id="coreVersion">Browser web</dd>
+        <dt>ID installazione</dt><dd id="coreInstallationId">—</dd>
+        <dt>Identità dispositivo</dt><dd id="deviceIdentity">—</dd>
+        <dt>Chiave pubblica</dt><dd id="devicePublicKey">—</dd>
+        <dt>Custodia chiave privata</dt><dd id="deviceSecretStorage">—</dd>
+        <dt>Associazione server</dt><dd id="pairingStatus">—</dd>
+        <dt>Trasporto</dt><dd id="coreTransport">—</dd>
+        <dt>Endpoint API</dt><dd id="coreEndpoint">—</dd>
+        <dt>Stato server</dt><dd id="coreServerStatus">—</dd>
+      </dl>
+    </section>
+
+    <section id="pairingSettings" class="info-card pairing-settings" hidden>
+      <h2>Associa questo dispositivo</h2>
+      <p>Genera un invito temporaneo sul PC server e incollalo qui. L’invito Direct può includere automaticamente indirizzo pubblico e identità del Connector; il pairing verifica il dispositivo ma non effettua automaticamente l’accesso a un account.</p>
+      <form id="pairingForm" class="pairing-form" autocomplete="off">
+        <label for="pairingDeviceName">Nome dispositivo</label>
+        <input id="pairingDeviceName" type="text" maxlength="80" autocomplete="off" spellcheck="false" placeholder="Baia su questo PC">
+        <label for="pairingInviteToken">Invito temporaneo</label>
+        <div class="pairing-row">
+          <input id="pairingInviteToken" type="password" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="baia-direct1.… oppure baia1.…" required>
+          <button id="pairingSubmit" class="action-button primary" type="submit">Associa</button>
+        </div>
+        <p id="pairingMessage" class="endpoint-message" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <section id="connectionSettings" class="info-card connection-settings" hidden>
+      <h2>Connessione Baia Core</h2>
+      <p>Configurazione tecnica temporanea per lo sviluppo. In futuro l’indirizzo verrà impostato dal pairing, senza configurazione manuale per gli amici.</p>
+      <form id="serverEndpointForm" class="endpoint-form">
+        <label for="serverEndpointInput">Indirizzo server</label>
+        <div class="endpoint-row">
+          <input id="serverEndpointInput" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:3000" required>
+          <button class="action-button primary" type="submit">Salva</button>
+          <button id="resetServerEndpoint" class="action-button" type="button">Ripristina locale</button>
+        </div>
+        <p id="endpointMessage" class="endpoint-message" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+  </main>
+  <style>
+    .profile-header{align-items:flex-start}.section-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}.section-heading h2{margin:2px 0 0;font-size:22px}.section-kicker{margin:0;color:var(--muted);font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}.role-badge{padding:6px 10px;border:1px solid rgba(139,183,79,.45);border-radius:999px;background:rgba(93,128,48,.2);font-size:12px;font-weight:800}.card-message{margin:0;color:var(--muted);line-height:1.5}.profile-details{display:grid;grid-template-columns:190px minmax(0,1fr);gap:14px 20px;margin:0}.profile-details dt{color:var(--muted)}.profile-details dd{margin:0;min-width:0;font-weight:700;overflow-wrap:anywhere}.profile-note{margin:24px 0 0;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);line-height:1.5}.device-card,.connection-settings,.pairing-settings{margin-top:20px}.password-form{margin-top:24px;padding-top:20px;border-top:1px solid var(--line)}.password-form h3{margin:0;font-size:19px}.password-form>p{margin:7px 0 17px;color:var(--muted);line-height:1.45}.password-form label,.endpoint-form label,.pairing-form label{display:block;margin-bottom:7px;font-size:12px;font-weight:700}.password-form input,.endpoint-row input,.pairing-form>input,.pairing-row input{width:100%;min-width:0;min-height:40px;margin-bottom:13px;padding:0 12px;border:1px solid var(--line);border-radius:7px;outline:none;background:var(--surface-3);color:#fff}.password-form input:focus,.endpoint-row input:focus,.pairing-form>input:focus,.pairing-row input:focus{border-color:rgba(93,128,48,.95);box-shadow:0 0 0 3px rgba(93,128,48,.17)}.account-actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:4px}.action-button.danger{border-color:rgba(205,91,91,.65);color:#ffc9c9}.connection-settings h2,.pairing-settings h2{margin:0;font-size:20px}.connection-settings>p,.pairing-settings>p{margin:8px 0 18px;color:var(--muted);line-height:1.5}.endpoint-row{display:grid;grid-template-columns:minmax(220px,1fr) auto auto;gap:9px}.endpoint-row input{margin-bottom:0}.endpoint-message{min-height:20px;margin:9px 0 0;color:var(--muted);font-size:12px}.endpoint-message.error{color:#ffbcbc}.pairing-form{display:grid;gap:7px}.pairing-form>input{margin-bottom:0}.pairing-row{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:9px}.pairing-row input{margin-bottom:0}.pairing-row+.endpoint-message{margin-top:2px}@media(max-width:760px){.endpoint-row,.pairing-row{grid-template-columns:1fr}.endpoint-row .action-button,.account-actions .action-button{width:100%}}@media(max-width:540px){.profile-details{grid-template-columns:1fr;gap:4px}.profile-details dd{margin-bottom:12px}.section-heading{align-items:flex-start;flex-direction:column}.profile-header{gap:14px}}
+  </style>
+</body>
+</html>
