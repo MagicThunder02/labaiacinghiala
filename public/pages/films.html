@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Film</title>
+  <link rel="stylesheet" href="/css/common-page.css">
+  <link rel="stylesheet" href="/css/films.css">
+  <script src="/js/api-config.js" defer></script>
+  <script src="/js/shell-bridge.js" defer></script>
+  <script src="/js/media-palette.js" defer></script>
+  <script src="/js/films.js" defer></script>
+</head>
+<body>
+  <main class="films-page">
+    <div id="browseView" class="films-browse-view">
+      <header class="films-header film-discovery-header">
+        <h1 id="pageTitle" class="films-title">Film</h1>
+
+        <div class="film-search-launcher-wrap">
+          <div id="searchField" class="film-search-launcher">
+            <span class="search-icon" aria-hidden="true"></span>
+            <label class="sr-only" for="searchInput">Cerca film</label>
+            <input
+              id="searchInput"
+              type="search"
+              autocomplete="off"
+              autocorrect="off"
+              autocapitalize="off"
+              spellcheck="false"
+              aria-label="Cerca film"
+              aria-controls="searchView"
+              aria-expanded="false"
+            >
+          </div>
+        </div>
+
+        <div class="film-filters-control">
+          <button id="filtersButton" class="film-filters-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="filtersPanel">
+            <span>Filtri</span>
+          </button>
+
+          <div id="filtersPanel" class="film-filters-panel" hidden>
+            <div class="film-filters-panel-head">
+              <strong>Filtri</strong>
+              <button id="homeButton" class="filter-home-button" type="button">Home</button>
+            </div>
+
+            <div class="filter-control">
+              <button id="genreButton" class="nav-button" type="button" aria-haspopup="true" aria-expanded="false">Generi</button>
+              <div id="genreMenu" class="filter-menu" hidden>
+                <label class="filter-menu-search" for="genreFilterSearch">
+                  <span class="search-icon" aria-hidden="true"></span>
+                  <span class="sr-only">Cerca un genere</span>
+                  <input id="genreFilterSearch" type="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Cerca genere">
+                </label>
+                <div id="genreOptions" class="filter-menu-options"></div>
+                <div id="genreFilterEmpty" class="filter-menu-empty" hidden>Nessun genere trovato.</div>
+              </div>
+            </div>
+
+            <div class="filter-control">
+              <button id="directorButton" class="nav-button" type="button" aria-haspopup="true" aria-expanded="false">Regista</button>
+              <div id="directorMenu" class="filter-menu director-menu" hidden>
+                <label class="filter-menu-search" for="directorFilterSearch">
+                  <span class="search-icon" aria-hidden="true"></span>
+                  <span class="sr-only">Cerca un regista</span>
+                  <input id="directorFilterSearch" type="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Cerca regista">
+                </label>
+                <div id="directorOptions" class="filter-menu-options"></div>
+                <div id="directorFilterEmpty" class="filter-menu-empty" hidden>Nessun regista trovato.</div>
+              </div>
+            </div>
+
+            <div class="filter-control">
+              <button id="yearButton" class="nav-button" type="button" aria-haspopup="true" aria-expanded="false">Anno</button>
+              <div id="yearMenu" class="filter-menu year-menu" hidden>
+                <label class="filter-menu-search" for="yearFilterSearch">
+                  <span class="search-icon" aria-hidden="true"></span>
+                  <span class="sr-only">Cerca un anno</span>
+                  <input id="yearFilterSearch" type="search" inputmode="numeric" autocomplete="off" placeholder="Cerca anno">
+                </label>
+                <div id="yearOptions" class="filter-menu-options"></div>
+                <div id="yearFilterEmpty" class="filter-menu-empty" hidden>Nessun anno trovato.</div>
+              </div>
+            </div>
+
+            <button id="clearFiltersButton" class="film-clear-filters-button" type="button" aria-label="Rimuovi tutti i filtri" disabled>
+              <span class="eraser-icon" aria-hidden="true"></span>
+              <span>Rimuovi filtri</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <section id="searchView" class="search-view" hidden>
+        <span id="searchCount" class="search-count search-view-count"></span>
+        <div id="searchEmpty" class="view-empty" hidden>Nessun titolo corrisponde alla ricerca.</div>
+        <ul id="searchResults" class="search-results"></ul>
+      </section>
+
+      <section id="homeView" class="home-view">
+        <section class="showcase-section">
+          <div class="section-heading">
+            <h2>Visti di recente</h2>
+          </div>
+          <div class="showcase-shell">
+            <button class="rail-arrow rail-arrow-left" type="button" data-scroll-target="recentRail" data-direction="-1" aria-label="Scorri a sinistra"><span class="film-icon chevron-left-icon" aria-hidden="true"></span></button>
+            <div id="recentRail" class="poster-rail"></div>
+            <button class="rail-arrow rail-arrow-right" type="button" data-scroll-target="recentRail" data-direction="1" aria-label="Scorri a destra"><span class="film-icon chevron-right-icon" aria-hidden="true"></span></button>
+          </div>
+          <div id="recentEmpty" class="rail-empty" hidden> </div>
+        </section>
+
+        <section class="showcase-section">
+          <div class="section-heading">
+            <h2>Ultimi arrivi</h2>
+          </div>
+          <div class="showcase-shell">
+            <button class="rail-arrow rail-arrow-left" type="button" data-scroll-target="latestRail" data-direction="-1" aria-label="Scorri gli ultimi arrivi a sinistra"><span class="film-icon chevron-left-icon" aria-hidden="true"></span></button>
+            <div id="latestRail" class="poster-rail"></div>
+            <button class="rail-arrow rail-arrow-right" type="button" data-scroll-target="latestRail" data-direction="1" aria-label="Scorri gli ultimi arrivi a destra"><span class="film-icon chevron-right-icon" aria-hidden="true"></span></button>
+          </div>
+          <div id="latestEmpty" class="rail-empty" hidden> </div>
+        </section>
+
+        <section class="showcase-section">
+          <div class="section-heading">
+            <h2>Consigliati</h2>
+          </div>
+          <div class="showcase-shell">
+            <button class="rail-arrow rail-arrow-left" type="button" data-scroll-target="recommendedRail" data-direction="-1" aria-label="Scorri a sinistra"><span class="film-icon chevron-left-icon" aria-hidden="true"></span></button>
+            <div id="recommendedRail" class="poster-rail"></div>
+            <button class="rail-arrow rail-arrow-right" type="button" data-scroll-target="recommendedRail" data-direction="1" aria-label="Scorri a destra"><span class="film-icon chevron-right-icon" aria-hidden="true"></span></button>
+          </div>
+          <div id="recommendedEmpty" class="rail-empty" hidden> </div>
+        </section>
+      </section>
+
+      <section id="catalogView" class="catalog-view" hidden>
+        <div class="catalog-summary">
+          <span id="catalogCount"></span>
+          <button id="clearYearButton" class="active-filter" type="button" hidden></button>
+        </div>
+        <div id="catalogEmpty" class="view-empty" hidden>Nessun film corrisponde ai filtri selezionati.</div>
+        <div id="catalogGrid" class="poster-grid"></div>
+        <div class="catalog-load-more-wrap">
+          <button id="catalogLoadMoreButton" class="catalog-load-more" type="button" hidden>Mostra altro</button>
+        </div>
+      </section>
+    </div>
+
+    <section id="detailView" class="film-detail-view" hidden aria-label="Dettagli film">
+      <div class="detail-visual" aria-hidden="true">
+        <img id="detailBackdropImage" class="detail-backdrop-image" alt="">
+        <div id="detailColorWash" class="detail-color-wash"></div>
+        <div class="detail-shade"></div>
+      </div>
+
+      <button id="detailBackButton" class="detail-back-button" type="button">
+        <span class="film-icon chevron-left-icon" aria-hidden="true"></span>
+        Indietro
+      </button>
+
+      <div class="detail-content">
+        <div class="detail-poster-shell">
+          <img id="detailPoster" class="detail-poster" alt="" hidden>
+          <div id="detailPosterFallback" class="detail-poster-fallback">—</div>
+        </div>
+
+        <div class="detail-side">
+          <header class="detail-heading">
+            <h1 id="detailTitle">—</h1>
+            <p id="detailMeta">—</p>
+          </header>
+
+          <div class="detail-actions" aria-label="Azioni di riproduzione">
+            <button id="resumeButton" class="detail-action primary" type="button">Riproduci</button>
+            <button id="restartButton" class="detail-action" type="button">Ricomincia</button>
+          </div>
+
+          <section id="similarSection" class="detail-similar-section" hidden aria-labelledby="similarTitle">
+            <div class="detail-similar-heading">
+              <h2 id="similarTitle">Film simili</h2>
+            </div>
+            <div class="showcase-shell detail-similar-shell">
+              <button class="rail-arrow rail-arrow-left" type="button" data-scroll-target="similarRail" data-direction="-1" aria-label="Scorri i film simili a sinistra"><span class="film-icon chevron-left-icon" aria-hidden="true"></span></button>
+              <div id="similarRail" class="poster-rail detail-similar-rail"></div>
+              <button class="rail-arrow rail-arrow-right" type="button" data-scroll-target="similarRail" data-direction="1" aria-label="Scorri i film simili a destra"><span class="film-icon chevron-right-icon" aria-hidden="true"></span></button>
+            </div>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <section id="playerView" class="film-player-view" hidden aria-label="Riproduzione film">
+      <div class="player-stage">
+        <div class="player-topbar">
+          <button id="closePlayerButton" class="player-back-button" type="button">
+            <span class="film-icon chevron-left-icon" aria-hidden="true"></span>
+            Indietro
+          </button>
+          <div class="player-heading">
+            <strong id="playerTitle">—</strong>
+            <span id="playerMeta"></span>
+          </div>
+          <div class="player-balance" aria-hidden="true"></div>
+        </div>
+
+        <video id="videoPlayer" playsinline preload="metadata" aria-label="Player video"></video>
+
+
+        <div id="playerLoading" class="player-loading-overlay" role="status" aria-live="polite" hidden>
+          <img class="player-loading-spinner" src="/assets/loading-cinghiale.gif" alt="" aria-hidden="true">
+          <span class="sr-only">Caricamento video</span>
+        </div>
+
+        <div class="player-side-controls" aria-label="Volume video">
+          <label class="player-side-control" for="playerVolume">
+            <input id="playerVolume" class="player-side-slider" type="range" min="0" max="100" value="100" step="1" aria-label="Volume">
+            <span class="player-side-icon film-icon volume-icon" aria-hidden="true"></span>
+          </label>
+        </div>
+
+        <div id="playerControls" class="custom-player-controls" aria-label="Controlli di riproduzione">
+          <div class="player-progress-row">
+            <label class="sr-only" for="playerSeek">Posizione nel film</label>
+            <input id="playerSeek" class="player-seek" type="range" min="0" max="0" value="0" step="0.1" aria-label="Posizione nel film">
+          </div>
+
+          <div class="player-controls-row">
+            <div class="player-time" aria-live="off">
+              <span id="remainingTime">-00:00:00</span>
+              <span class="player-time-separator" aria-hidden="true">/</span>
+              <span id="totalTime">00:00:00</span>
+            </div>
+
+            <button id="playPauseButton" class="player-control-button player-play-pause" type="button" aria-label="Riproduci">
+              <span id="playPauseIcon" class="film-icon play-icon" aria-hidden="true"></span>
+            </button>
+
+            <button id="fullscreenButton" class="player-control-button player-fullscreen" type="button" aria-label="Entra a schermo intero">
+              <span id="fullscreenIcon" class="film-icon fullscreen-enter-icon" aria-hidden="true"></span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Libri</title>
+  <link rel="stylesheet" href="/css/common-page.css">
+  <link rel="stylesheet" href="/css/films.css">
+  <link rel="stylesheet" href="/css/reading.css">
+  <script src="/js/api-config.js" defer></script>
+  <script src="/js/shell-bridge.js" defer></script>
+  <script src="/js/reading-reader-utils.js" defer></script>
+  <script src="/js/reading-library.js" defer></script>
+</head>
+<body data-reading-category="books" data-reading-label="Libri">
+  <main class="films-page reading-page">
+    <div id="browseView" class="films-browse-view reading-browse-view">
+      <header class="films-header reading-header film-discovery-header">
+        <h1 id="pageTitle" class="films-title">Libri</h1>
+
+        <div class="film-search-launcher-wrap">
+          <div id="searchField" class="film-search-launcher">
+            <span class="search-icon" aria-hidden="true"></span>
+            <label class="sr-only" for="searchInput">Cerca in Libri</label>
+            <input
+              id="searchInput"
+              type="search"
+              autocomplete="off"
+              autocorrect="off"
+              autocapitalize="off"
+              spellcheck="false"
+              aria-label="Cerca in Libri"
+              aria-controls="searchView"
+              aria-expanded="false"
+            >
+          </div>
+        </div>
+
+        <div class="film-filters-control">
+          <button id="filtersButton" class="film-filters-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="filtersPanel">
+            <span>Filtri</span>
+          </button>
+
+          <div id="filtersPanel" class="film-filters-panel" hidden>
+            <div class="film-filters-panel-head">
+              <strong>Filtri</strong>
+              <button id="homeButton" class="filter-home-button" type="button">Home</button>
+            </div>
+
+            <div class="filter-control">
+              <button id="genreButton" class="nav-button" type="button" aria-haspopup="true" aria-expanded="false">Generi</button>
+              <div id="genreMenu" class="filter-menu" hidden>
+                <label class="filter-menu-search" for="genreFilterSearch">
+                  <span class="search-icon" aria-hidden="true"></span>
+                  <span class="sr-only">Cerca un genere</span>
+                  <input id="genreFilterSearch" type="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Cerca genere">
+                </label>
+                <div id="genreOptions" class="filter-menu-options"></div>
+                <div id="genreFilterEmpty" class="filter-menu-empty" hidden>Nessun genere trovato.</div>
+              </div>
+            </div>
+
+            <div class="filter-control">
+              <button id="authorButton" class="nav-button" type="button" aria-haspopup="true" aria-expanded="false">Autore</button>
+              <div id="authorMenu" class="filter-menu reading-author-menu" hidden>
+                <label class="filter-menu-search" for="authorFilterSearch">
+                  <span class="search-icon" aria-hidden="true"></span>
+                  <span class="sr-only">Cerca un autore</span>
+                  <input id="authorFilterSearch" type="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Cerca autore">
+                </label>
+                <div id="authorOptions" class="filter-menu-options"></div>
+                <div id="authorFilterEmpty" class="filter-menu-empty" hidden>Nessun autore trovato.</div>
+              </div>
+            </div>
+
+            <div class="filter-control">
+              <button id="yearButton" class="nav-button" type="button" aria-haspopup="true" aria-expanded="false">Anno</button>
+              <div id="yearMenu" class="filter-menu year-menu" hidden>
+                <label class="filter-menu-search" for="yearFilterSearch">
+                  <span class="search-icon" aria-hidden="true"></span>
+                  <span class="sr-only">Cerca un anno</span>
+                  <input id="yearFilterSearch" type="search" inputmode="numeric" autocomplete="off" placeholder="Cerca anno">
+                </label>
+                <div id="yearOptions" class="filter-menu-options"></div>
+                <div id="yearFilterEmpty" class="filter-menu-empty" hidden>Nessun anno trovato.</div>
+              </div>
+            </div>
+
+            <button id="clearFiltersButton" class="film-clear-filters-button" type="button" aria-label="Rimuovi tutti i filtri" disabled>
+              <span class="eraser-icon" aria-hidden="true"></span>
+              <span>Rimuovi filtri</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <section id="searchView" class="search-view" hidden>
+        <span id="searchCount" class="search-count search-view-count"></span>
+        <div id="searchEmpty" class="view-empty" hidden>Nessun titolo corrisponde alla ricerca.</div>
+        <ul id="searchResults" class="search-results"></ul>
+      </section>
+
+      <section id="homeView" class="home-view reading-home-view">
+        <section class="showcase-section reading-showcase">
+          <div class="section-heading"><h2>Riprendi lettura</h2></div>
+          <div class="showcase-shell reading-rail-shell">
+            <button class="rail-arrow rail-arrow-left" type="button" data-scroll-target="recentRail" data-direction="-1" aria-label="Scorri a sinistra"><span class="film-icon chevron-left-icon" aria-hidden="true"></span></button>
+            <div id="recentRail" class="poster-rail reading-rail"></div>
+            <button class="rail-arrow rail-arrow-right" type="button" data-scroll-target="recentRail" data-direction="1" aria-label="Scorri a destra"><span class="film-icon chevron-right-icon" aria-hidden="true"></span></button>
+          </div>
+          <div id="recentEmpty" class="rail-empty" hidden> </div>
+        </section>
+
+        <section class="showcase-section reading-showcase">
+          <div class="section-heading"><h2>Ultimi arrivi</h2></div>
+          <div class="showcase-shell reading-rail-shell">
+            <button class="rail-arrow rail-arrow-left" type="button" data-scroll-target="latestRail" data-direction="-1" aria-label="Scorri gli ultimi arrivi a sinistra"><span class="film-icon chevron-left-icon" aria-hidden="true"></span></button>
+            <div id="latestRail" class="poster-rail reading-rail"></div>
+            <button class="rail-arrow rail-arrow-right" type="button" data-scroll-target="latestRail" data-direction="1" aria-label="Scorri gli ultimi arrivi a destra"><span class="film-icon chevron-right-icon" aria-hidden="true"></span></button>
+          </div>
+          <div id="latestEmpty" class="rail-empty" hidden> </div>
+        </section>
+
+        <section class="showcase-section reading-showcase">
+          <div class="section-heading"><h2>Consigliati</h2></div>
+          <div class="showcase-shell reading-rail-shell">
+            <button class="rail-arrow rail-arrow-left" type="button" data-scroll-target="recommendedRail" data-direction="-1" aria-label="Scorri a sinistra"><span class="film-icon chevron-left-icon" aria-hidden="true"></span></button>
+            <div id="recommendedRail" class="poster-rail reading-rail"></div>
+            <button class="rail-arrow rail-arrow-right" type="button" data-scroll-target="recommendedRail" data-direction="1" aria-label="Scorri a destra"><span class="film-icon chevron-right-icon" aria-hidden="true"></span></button>
+          </div>
+          <div id="recommendedEmpty" class="rail-empty" hidden> </div>
+        </section>
+      </section>
+
+      <section id="catalogView" class="catalog-view reading-catalog-view" hidden>
+        <div class="catalog-summary"><span id="catalogCount"></span></div>
+        <div id="catalogEmpty" class="view-empty" hidden>Nessun titolo corrisponde ai filtri selezionati.</div>
+        <div id="catalogGrid" class="reading-grid"></div>
+      </section>
+    </div>
+
+    <section id="readerView" class="reading-reader" hidden aria-label="Reader">
+      <header class="reader-topbar">
+        <button id="readerBackButton" class="reader-top-button reader-back" type="button" aria-label="Torna alla libreria">
+          <svg class="reader-back-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M12.5 3.5 6 10l6.5 6.5"/></svg><span class="reader-back-label">Indietro</span>
+        </button>
+        <strong id="readerTitle" class="reader-title">—</strong>
+        <div class="reader-top-actions">
+          <div class="reader-zoom-controls" role="group" aria-label="Zoom pagina">
+            <button id="readerZoomOutButton" class="reader-zoom-button" type="button" aria-label="Rimpicciolisci pagina">−</button>
+            <button id="readerZoomValue" class="reader-zoom-value" type="button" aria-label="Ripristina zoom al 100%" title="Ripristina zoom al 100%" aria-live="polite">100%</button>
+            <button id="readerZoomInButton" class="reader-zoom-button" type="button" aria-label="Ingrandisci pagina">+</button>
+          </div>
+          <button id="bookmarkButton" class="reader-top-button reader-bookmark-button" type="button">Segnalibro</button>
+        </div>
+      </header>
+
+      <div id="readerStage" class="reader-stage">
+        <div id="readerSurfaceViewport" class="reader-surface-viewport">
+          <div id="readerSurface" class="reader-surface">
+            <iframe id="readerFrame" class="reader-frame" title="Pagina del libro" hidden></iframe>
+            <canvas id="readerCanvas" class="reader-canvas" aria-label="Pagina PDF" hidden></canvas>
+            <img id="readerImage" class="reader-image" alt="" hidden>
+          </div>
+        </div>
+        <div id="readerLoading" class="reader-loading" role="status">
+          <img src="/assets/loading-cinghiale.gif" alt="" aria-hidden="true">
+          <span>Caricamento…</span>
+        </div>
+        <div id="readerError" class="reader-error" hidden></div>
+
+        <button id="readerPrevButton" class="reader-page-arrow reader-page-prev" type="button" aria-label="Pagina precedente">‹</button>
+        <button id="readerNextButton" class="reader-page-arrow reader-page-next" type="button" aria-label="Pagina successiva">›</button>
+        <div id="readerPageStatus" class="reader-page-status" aria-live="polite"></div>
+
+        <div id="bookmarkRibbon" class="bookmark-ribbon" aria-hidden="true" hidden></div>
+
+        <div id="closingCover" class="closing-cover" aria-hidden="true" hidden>
+          <div class="closing-cover-face closing-cover-front">
+            <img id="closingCoverImage" alt="">
+            <div id="closingCoverFallback" class="closing-cover-fallback"></div>
+          </div>
+          <div class="closing-cover-face closing-cover-back"></div>
+        </div>
+      </div>
+
+    </section>
+  </main>
+</body>
+</html>

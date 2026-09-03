@@ -1,0 +1,127 @@
+.catalog-icon {
+  display: inline-block;
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+.play-icon {
+  width: 15px;
+  height: 15px;
+  -webkit-mask-image: url('/icons/play.svg');
+  mask-image: url('/icons/play.svg');
+}
+.close-icon {
+  width: 19px;
+  height: 19px;
+  -webkit-mask-image: url('/icons/close.svg');
+  mask-image: url('/icons/close.svg');
+}
+.favorite-icon {
+  width: 19px;
+  height: 19px;
+  -webkit-mask-image: url('/icons/star-outline.svg');
+  mask-image: url('/icons/star-outline.svg');
+}
+.favorite-button.active .favorite-icon {
+  -webkit-mask-image: url('/icons/star-filled.svg');
+  mask-image: url('/icons/star-filled.svg');
+}
+.movie-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: clamp(14px, 1.8vw, 22px);
+}
+.movie-card {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #414141;
+  transition: transform 150ms ease, background 150ms ease;
+}
+.movie-card:hover { transform: translateY(-3px); background: #484848; }
+.poster-button { width: 100%; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.poster {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 2 / 3;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 30% 25%, rgba(255, 255, 255, .12), transparent 24%),
+    linear-gradient(145deg, #5d8030, #3b4d1b 58%, #292929);
+}
+.poster::after { content: ""; position: absolute; inset: 0; background: linear-gradient(transparent 55%, rgba(0, 0, 0, .62)); }
+.poster-initials { max-width: 82%; font-size: clamp(31px, 5vw, 58px); font-weight: 900; letter-spacing: -.08em; opacity: .9; }
+.play-badge {
+  position: absolute;
+  z-index: 2;
+  left: 12px;
+  bottom: 12px;
+  width: 37px;
+  height: 37px;
+  display: grid;
+  place-items: center;
+  padding-left: 2px;
+  border-radius: 50%;
+  background: #fff;
+  color: #2a2a2a;
+}
+.favorite-button {
+  position: absolute;
+  z-index: 3;
+  top: 9px;
+  right: 9px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(25, 25, 25, .76);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  cursor: pointer;
+}
+.favorite-button.active { color: #f5cf5e; }
+.movie-info { padding: 11px 12px 13px; }
+.movie-title { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 700; }
+.movie-series { margin: 5px 0 0; overflow: hidden; color: #d8e3cc; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.movie-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; color: var(--muted); font-size: 12px; }
+.progress-track { height: 3px; margin-top: 10px; overflow: hidden; border-radius: 99px; background: rgba(255, 255, 255, .13); }
+.progress-bar { height: 100%; background: #7ba641; }
+.player-dialog {
+  width: min(1100px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #252525;
+  color: #fff;
+}
+.player-dialog::backdrop { background: rgba(0, 0, 0, .8); }
+.player-shell { padding: 16px; }
+.player-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 13px; }
+.player-header h2 { margin: 0; font-size: 22px; }
+.player-header p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+.close-player {
+  flex: 0 0 auto;
+  width: 37px;
+  height: 37px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #454545;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  cursor: pointer;
+}
+video { display: block; width: 100%; max-height: calc(100vh - 150px); border-radius: 8px; background: #000; }
+.compatibility-notice { margin: 11px 0 0; color: var(--warning); font-size: 13px; }
+@media (max-width: 480px) { .movie-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; } }

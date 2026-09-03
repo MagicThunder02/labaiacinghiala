@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Baia Cinghiala",
+  "version": "0.5.0",
+  "identifier": "it.baia.cinghiala",
+  "build": {
+    "frontendDist": "../public"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Baia Cinghiala",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "withGlobalTauri": true
+  },
+  "bundle": {
+    "active": false
+  }
+}

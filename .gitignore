@@ -1,0 +1,18 @@
+node_modules/
+.env
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
+media/*
+!media/.gitkeep
+npm-debug.log*
+
+# Build/cache Rust e Tauri
+target/
+**/target/
+
+# Artefatti di preflight/handoff locali
+.phase5-preflight-lock-backup/
+.baia-fase0-logs/
+Baia-Direct-Host-Test-*/
+Baia-Direct-Host-Test-*.zip

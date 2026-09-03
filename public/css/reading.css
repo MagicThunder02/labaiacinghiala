@@ -1,0 +1,472 @@
+:root {
+  --reading-green: #5d8030;
+  --reading-green-dark: #3b4d1b;
+  --reading-paper: #f5f1e7;
+}
+
+/* Le superfici del reader hanno display espliciti: hidden deve vincere sempre.
+   Senza questa regola loading + iframe finivano nello stesso grid layout e
+   dividevano la viewport in due anche dopo il caricamento. */
+[hidden] { display: none !important; }
+
+.reading-page { background: var(--page-bg); }
+.reading-browse-view { min-height: 100vh; }
+.reading-author-menu { width: min(310px, 78vw); }
+
+.reading-rail { grid-auto-columns: clamp(132px, 12vw, 176px); }
+.reading-card { min-width: 0; scroll-snap-align: start; }
+.reading-card-button {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+.reading-card-button:focus-visible { outline: none; }
+.reading-cover {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--cover-radius);
+  background: transparent;
+  box-shadow: none;
+  transition: transform 150ms ease, box-shadow 180ms ease;
+}
+.reading-card-button:hover .reading-cover,
+.reading-card-button:focus-visible .reading-cover {
+  transform: translateY(-4px) scale(1.018);
+  box-shadow: var(--cover-hover-glow);
+}
+.reading-cover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  border-radius: var(--cover-radius);
+}
+/* Nessuna iniziale o testo sovrapposto alla copertina quando manca l'immagine. */
+.reading-cover-fallback {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 30% 22%, rgba(255,255,255,.11), transparent 25%),
+    linear-gradient(145deg, #5d8030, #3b4d1b 58%, #292929);
+}
+.reading-card-title {
+  margin: 9px 0 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 700;
+}
+.reading-card-meta {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255,255,255,.62);
+  font-size: 12px;
+}
+.reading-bookmark-dot {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  right: 9px;
+  width: 20px;
+  height: 32px;
+  background: var(--reading-green);
+  clip-path: polygon(0 0,100% 0,100% 78%,50% 100%,0 78%);
+  filter: drop-shadow(0 3px 3px rgba(0,0,0,.34));
+}
+
+.reading-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(clamp(126px, 12vw, 170px), 1fr));
+  gap: clamp(20px, 2.4vw, 30px) clamp(14px, 1.8vw, 22px);
+}
+.reading-grid .reading-card { width: 100%; max-width: 190px; }
+
+/* Reader */
+.reading-reader {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #171717;
+}
+.reader-topbar {
+  position: absolute;
+  z-index: 25;
+  inset: 0 0 auto;
+  height: 64px;
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(0, 2fr) minmax(250px, 1fr);
+  align-items: center;
+  gap: 18px;
+  padding: 0 22px;
+  background: linear-gradient(to bottom, rgba(17,17,17,.96), rgba(17,17,17,.83));
+  box-shadow: 0 4px 16px rgba(0,0,0,.22);
+}
+.reader-title {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  font-size: 17px;
+  line-height: 1;
+}
+.reader-top-button {
+  justify-self: start;
+  min-height: 38px;
+  padding: 7px 13px;
+  border: 0;
+  border-radius: 6px;
+  background: #444;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 700;
+}
+.reader-top-button:hover { background: #555; }
+.reader-back {
+  box-sizing: border-box;
+  display: inline-grid;
+  grid-template-columns: 16px auto;
+  align-items: center;
+  justify-content: center;
+  column-gap: 8px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0 14px;
+  line-height: 1;
+}
+.reader-back-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  overflow: visible;
+  stroke: currentColor;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+.reader-back-label {
+  display: block;
+  line-height: 1;
+}
+.reader-top-actions {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.reader-bookmark-button { flex: 0 0 auto; background: var(--reading-green); }
+.reader-bookmark-button:hover { background: #6f963a; }
+.reader-bookmark-button:disabled { opacity: .55; cursor: wait; }
+
+.reader-zoom-controls {
+  display: inline-grid;
+  grid-template-columns: 36px minmax(48px, auto) 36px;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 8px;
+  background: rgba(0,0,0,.28);
+}
+.reader-zoom-button {
+  width: 36px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+.reader-zoom-button:hover:not(:disabled) { background: rgba(93,128,48,.62); }
+.reader-zoom-button:disabled { opacity: .28; cursor: default; }
+.reader-zoom-value {
+  min-width: 48px;
+  height: 34px;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: rgba(255,255,255,.84);
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.reader-zoom-value:hover,
+.reader-zoom-value:focus-visible {
+  background: rgba(255,255,255,.08);
+  color: #fff;
+  outline: none;
+}
+
+/* Non è un grid: iframe, immagine, loading ed errore sono layer sovrapposti.
+   In questo modo il documento usa SEMPRE tutta l'altezza disponibile. */
+.reader-stage {
+  position: absolute;
+  inset: 64px 0 0;
+  overflow: hidden;
+  background: #1f1f1f;
+  perspective: 1600px;
+}
+.reader-surface-viewport {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  overflow: auto;
+  scrollbar-color: rgba(255,255,255,.24) transparent;
+  scrollbar-width: thin;
+}
+.reader-surface {
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  width: max-content;
+  min-width: 100%;
+  height: max-content;
+  min-height: 100%;
+  padding: 24px 78px 48px;
+}
+.reader-frame {
+  position: relative;
+  z-index: 2;
+  display: block;
+  border: 0;
+  background: var(--reading-paper);
+}
+.reader-frame.epub-reader-frame {
+  border: 1px solid rgba(255,255,255,.14);
+  background: var(--reading-paper);
+  box-shadow: 0 10px 34px rgba(0,0,0,.42);
+}
+
+.reader-canvas {
+  position: relative;
+  z-index: 3;
+  display: block;
+  background: #fff;
+  box-shadow: 0 6px 24px rgba(0,0,0,.34);
+}
+
+.reader-image {
+  position: relative;
+  z-index: 2;
+  display: block;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  box-shadow: 0 4px 18px rgba(0,0,0,.3);
+}
+.reader-loading {
+  position: absolute;
+  z-index: 12;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  color: rgba(255,255,255,.72);
+  pointer-events: none;
+}
+.reader-loading img { width: 120px; height: auto; }
+.reader-error {
+  position: absolute;
+  z-index: 13;
+  top: 50%;
+  left: 50%;
+  width: min(620px, calc(100% - 80px));
+  padding: 22px;
+  color: #fff;
+  text-align: center;
+  transform: translate(-50%, -50%);
+}
+.reader-page-arrow {
+  position: absolute;
+  z-index: 20;
+  top: 50%;
+  width: 58px;
+  height: 94px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(20,20,20,.64);
+  color: #fff;
+  font-size: 58px;
+  line-height: 1;
+  transform: translateY(-50%);
+  cursor: pointer;
+  transition: background 140ms ease, opacity 140ms ease;
+}
+.reader-page-arrow:hover { background: rgba(93,128,48,.88); }
+.reader-page-arrow:disabled { opacity: .18; cursor: default; }
+.reader-page-prev { left: 18px; }
+.reader-page-next { right: 18px; }
+.reader-page-status {
+  position: absolute;
+  z-index: 15;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(0,0,0,.55);
+  color: rgba(255,255,255,.82);
+  font-size: 12px;
+}
+
+.bookmark-ribbon {
+  visibility: hidden;
+  opacity: 0;
+  position: absolute;
+  /* Tra la pagina e la copertina: quando la cover ruota, passa davvero davanti al segnalibro. */
+  z-index: 70;
+  top: var(--bookmark-start-top, -170px);
+  left: var(--bookmark-left, 50%);
+  width: var(--bookmark-width, 76px);
+  height: var(--bookmark-height, 144px);
+  background: var(--reading-green);
+  clip-path: polygon(0 0,100% 0,100% 84%,50% 100%,0 84%);
+  filter: drop-shadow(0 8px 10px rgba(0,0,0,.4));
+  pointer-events: none;
+  will-change: top, transform, opacity;
+}
+.closing-cover {
+  visibility: hidden;
+  opacity: 0;
+  position: absolute;
+  z-index: 80;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  transform: rotateY(-180deg);
+  transform-origin: left center;
+  transform-style: preserve-3d;
+  /* Il piano della copertina e' sempre opaco: durante la prima meta'
+     della rotazione questa superficie rappresenta l'interno bianco. */
+  background: #fff;
+  box-shadow: none;
+  overflow: hidden;
+  will-change: transform;
+  pointer-events: none;
+}
+.closing-cover-face {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+.closing-cover-front {
+  transform: rotateY(0deg);
+  /* Base nascosta: anche il frame precedente all'avvio dell'animazione
+     non puo' mostrare la cover specchiata. */
+  opacity: 0;
+  background: linear-gradient(145deg, #5d8030, #3b4d1b 58%, #292929);
+  box-shadow: none;
+}
+.closing-cover-back {
+  /* L'interno non e' piu' una seconda faccia 3D. E' il fondo bianco
+     opaco del piano .closing-cover, cosi' WebView2 non puo' perderlo
+     durante il passaggio edge-on. */
+  display: none;
+}
+.closing-cover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 0;
+}
+.closing-cover-fallback {
+  display: none;
+  width: 100%;
+  height: 100%;
+  background:
+    radial-gradient(circle at 30% 22%, rgba(255,255,255,.11), transparent 25%),
+    linear-gradient(145deg, #5d8030, #3b4d1b 58%, #292929);
+}
+.reading-reader.is-bookmarking .reader-topbar,
+.reading-reader.is-bookmarking .reader-page-arrow { pointer-events: none; }
+.reading-reader.is-bookmarking .bookmark-ribbon { visibility: visible; opacity: 1; animation: bookmark-drop 430ms cubic-bezier(.16,.78,.29,1.16) forwards; }
+.reading-reader.is-bookmarking .closing-cover { visibility: visible; opacity: 1; animation: book-close 860ms 260ms cubic-bezier(.2,.72,.18,1) forwards; }
+/* Il piano della cover resta bianco e opaco per tutta la rotazione.
+   book-close usa cubic-bezier(.2,.72,.18,1): con questa curva il punto
+   edge-on (-90deg) arriva gia' a circa il 13.8% del tempo, non al 50%.
+   Il fronte viene quindi acceso attorno a quel punto, quando la cover e'
+   quasi di taglio, evitando sia ritardi visibili sia frame trasparenti. */
+.reading-reader.is-bookmarking .closing-cover-front { animation: cover-front-face 860ms 260ms linear forwards; }
+.reading-reader.is-bookmarking .reader-frame:not([hidden]),
+.reading-reader.is-bookmarking .reader-canvas:not([hidden]),
+.reading-reader.is-bookmarking .reader-image:not([hidden]) { animation: page-dim 860ms 260ms ease-out forwards; }
+
+@keyframes bookmark-drop {
+  0% { top: var(--bookmark-start-top, -170px); transform: translateY(-10px) rotate(2deg); opacity: 0; }
+  68% { top: calc(var(--bookmark-end-top, 42px) + 6px); transform: translateY(0) rotate(-1deg); opacity: 1; }
+  100% { top: var(--bookmark-end-top, 42px); transform: translateY(0) rotate(0); opacity: 1; }
+}
+@keyframes book-close {
+  0% { transform: rotateY(-180deg); }
+  100% { transform: rotateY(0deg); }
+}
+@keyframes cover-front-face {
+  0%, 13% { opacity: 0; }
+  15%, 100% { opacity: 1; }
+}
+@keyframes page-dim {
+  0%, 44% { filter: brightness(1); }
+  100% { filter: brightness(.62); }
+}
+
+@media (max-width: 820px) {
+  .reading-rail { grid-auto-columns: 128px; }
+  .reading-grid { grid-template-columns: repeat(auto-fill, minmax(115px, 1fr)); gap: 20px 14px; }
+  .reader-topbar { grid-template-columns: 58px minmax(0, 1fr) auto; padding: 0 8px; gap: 6px; }
+  .reader-top-actions { gap: 6px; }
+  .reader-top-button { padding: 7px 9px; font-size: 13px; }
+  .reader-back { gap: 0; padding: 0 9px; }
+  .reader-back > span:last-child { display: none; }
+  .reader-zoom-controls { grid-template-columns: 30px 42px 30px; }
+  .reader-zoom-button { width: 30px; }
+  .reader-zoom-value { min-width: 42px; font-size: 11px; }
+  .reader-surface { padding: 16px 52px 42px; }
+  .reader-page-arrow { width: 44px; height: 76px; font-size: 48px; }
+  .reader-page-prev { left: 6px; }
+  .reader-page-next { right: 6px; }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .reading-cover { box-shadow: none; }
+  .reading-card-button:hover .reading-cover { transform: none; box-shadow: none; }
+  .reader-page-arrow { touch-action: manipulation; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reading-cover { transition: none; }
+  .reading-reader.is-bookmarking .bookmark-ribbon { animation-duration: 1ms; }
+  .reading-reader.is-bookmarking .closing-cover { animation-duration: 1ms; animation-delay: 1ms; }
+  .reading-reader.is-bookmarking .closing-cover-front { animation-duration: 1ms; animation-delay: 1ms; }
+  .reading-reader.is-bookmarking .reader-frame:not([hidden]),
+  .reading-reader.is-bookmarking .reader-canvas:not([hidden]),
+  .reading-reader.is-bookmarking .reader-image:not([hidden]) { animation-duration: 1ms; animation-delay: 1ms; }
+}

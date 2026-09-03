@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Editor metadati</title>
+  <link rel="stylesheet" href="/css/common-page.css">
+  <link rel="stylesheet" href="/css/metadata-editor.css">
+  <script src="/js/api-config.js" defer></script>
+  <script src="/js/shell-bridge.js" defer></script>
+  <script src="/js/metadata-editor.js" defer></script>
+</head>
+<body>
+  <main class="metadata-page">
+    <header class="metadata-header">
+      <div>
+        <h1>Editor metadati</h1>
+      </div>
+    </header>
+
+    <section class="metadata-layout">
+      <aside class="browser-panel" aria-label="Selezione contenuto">
+        <label class="field-label" for="categorySelect">Categoria</label>
+        <select id="categorySelect" class="control-select" autocomplete="off">
+          <option value="movie">Film</option>
+          <option value="series">Serie</option>
+          <option value="music">Musica</option>
+          <option value="books">Libri</option>
+          <option value="comics">Fumetti</option>
+          <option value="manga">Manga</option>
+        </select>
+
+        <div id="musicScopeToggle" class="music-scope-toggle" aria-label="Tipo di metadati musicali" hidden>
+          <button type="button" class="music-scope-button active" data-music-scope="track" aria-pressed="true">Brano</button>
+          <button type="button" class="music-scope-button" data-music-scope="album" aria-pressed="false">Album</button>
+        </div>
+
+        <label class="field-label" for="metadataSearch">Cerca per titolo o nome file</label>
+        <div class="search-wrap">
+          <input id="metadataSearch" class="control-input" type="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Inizia a digitare…" data-no-history>
+          <span id="resultCount" class="result-count">0</span>
+        </div>
+
+        <div id="metadataResults" class="metadata-results" role="listbox" aria-label="Risultati"></div>
+      </aside>
+
+      <section class="editor-panel" aria-live="polite">
+        <div id="editorEmpty" class="editor-empty" aria-hidden="true"></div>
+
+        <form id="metadataForm" class="metadata-form" autocomplete="off" novalidate hidden>
+          <div class="editor-title-row">
+            <div>
+              <p id="selectedCategory" class="eyebrow">Film</p>
+              <h2 id="selectedFile">—</h2>
+              <p id="selectedPath" class="selected-path">—</p>
+            </div>
+          </div>
+
+          <div class="form-grid">
+            <label class="form-field form-field-wide">
+              <span id="titleLabel">Titolo</span>
+              <input id="titleInput" type="text" maxlength="300" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-no-history required>
+            </label>
+
+            <label id="yearField" class="form-field">
+              <span>Anno</span>
+              <input id="yearInput" type="number" min="1888" max="2200" inputmode="numeric" autocomplete="off" data-no-history>
+            </label>
+
+            <label id="directorField" class="form-field">
+              <span id="directorLabel">Regista</span>
+              <input id="directorInput" type="text" maxlength="500" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-no-history>
+            </label>
+
+            <label id="genresField" class="form-field form-field-wide">
+              <span>Generi</span>
+              <input id="genresInput" type="text" maxlength="500" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-no-history placeholder="Azione, Avventura, Fantascienza">
+              <small>Separa i generi con una virgola.</small>
+            </label>
+
+            <label id="seasonField" class="form-field" hidden>
+              <span>Stagione</span>
+              <input id="seasonInput" type="number" min="1" max="999" inputmode="numeric">
+            </label>
+
+            <label id="episodeField" class="form-field" hidden>
+              <span>Numero episodio</span>
+              <input id="episodeInput" type="number" min="1" max="999" inputmode="numeric">
+            </label>
+          </div>
+
+          <section id="musicFields" class="music-fields" hidden>
+            <div class="music-fields-grid">
+              <label id="musicArtistsField" class="form-field form-field-wide">
+                <span>Artisti del brano</span>
+                <input id="musicArtistsInput" type="text" maxlength="1000" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-no-history required>
+                <small>Separa più artisti con una virgola.</small>
+              </label>
+
+              <label id="musicAlbumField" class="form-field form-field-wide">
+                <span>Album</span>
+                <input id="musicAlbumInput" type="text" maxlength="500" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-no-history required>
+              </label>
+
+              <label id="musicAlbumArtistsField" class="form-field form-field-wide">
+                <span>Artisti album</span>
+                <input id="musicAlbumArtistsInput" type="text" maxlength="1000" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-no-history>
+                <small>Se vuoto, il server usa gli artisti del brano. Per le compilation è obbligatorio.</small>
+              </label>
+
+              <label id="musicDateField" class="form-field">
+                <span>Data tag</span>
+                <input id="musicDateInput" type="text" maxlength="40" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-no-history placeholder="1970 oppure 1970-09-18">
+              </label>
+
+              <label id="musicTrackNumberField" class="form-field">
+                <span>Numero traccia</span>
+                <input id="musicTrackNumberInput" type="number" min="1" max="9999" inputmode="numeric" autocomplete="off" required>
+              </label>
+
+              <label id="musicTrackTotalField" class="form-field">
+                <span>Totale tracce</span>
+                <input id="musicTrackTotalInput" type="number" min="1" max="9999" inputmode="numeric" autocomplete="off">
+              </label>
+
+              <label id="musicDiscNumberField" class="form-field">
+                <span>Numero disco</span>
+                <input id="musicDiscNumberInput" type="number" min="1" max="999" inputmode="numeric" autocomplete="off">
+              </label>
+
+              <label id="musicDiscTotalField" class="form-field">
+                <span>Totale dischi</span>
+                <input id="musicDiscTotalInput" type="number" min="1" max="999" inputmode="numeric" autocomplete="off">
+              </label>
+
+              <label id="musicComposersField" class="form-field form-field-wide">
+                <span>Compositori</span>
+                <input id="musicComposersInput" type="text" maxlength="1000" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-no-history>
+                <small>Separa più compositori con una virgola.</small>
+              </label>
+
+              <label id="musicCommentField" class="form-field form-field-wide">
+                <span>Commento</span>
+                <textarea id="musicCommentInput" rows="3" maxlength="4000" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-no-history></textarea>
+              </label>
+
+              <label id="musicCompilationField" class="music-checkbox-field form-field-wide">
+                <input id="musicCompilationInput" type="checkbox">
+                <span>Compilation</span>
+              </label>
+            </div>
+
+            <div class="music-properties" aria-label="Proprietà tecniche del file">
+              <h3 id="musicPropertiesHeading">Proprietà del file</h3>
+              <p id="musicPropertiesText">—</p>
+            </div>
+
+            <section id="musicAlbumTrackPreview" class="music-album-track-preview" hidden aria-label="Brani coinvolti nella modifica collettiva">
+              <div class="music-album-track-heading">
+                <h3>Brani coinvolti</h3>
+                <span id="musicAlbumTrackCount">0 file</span>
+              </div>
+              <p id="musicAlbumMixedNotice" class="music-album-mixed-notice" hidden></p>
+              <div id="musicAlbumTrackList" class="music-album-track-list"></div>
+            </section>
+          </section>
+
+          <section id="posterEditor" class="poster-editor">
+            <div class="poster-preview-shell">
+              <img id="posterPreview" class="poster-preview" alt="Anteprima copertina" hidden>
+              <div id="posterFallback" class="poster-fallback">Nessuna copertina</div>
+            </div>
+            <div id="posterControls" class="poster-controls">
+              <h3 id="posterHeading">Copertina</h3>
+              <p id="posterDescription">JPG, PNG, WebP o AVIF, massimo 6 MB. La nuova immagine viene salvata nella cartella dati del server.</p>
+              <div id="posterUploadControls">
+                <div class="poster-action-row">
+                  <label class="file-button" for="posterInput">Sostituisci copertina</label>
+                  <input id="posterInput" type="file" accept="image/jpeg,image/png,image/webp,image/avif" hidden>
+                  <button id="musicCoverRemoveButton" class="cover-remove-button" type="button" hidden>Elimina copertina</button>
+                </div>
+                <span id="posterFileName" class="poster-file-name">Nessun nuovo file selezionato</span>
+              </div>
+              <p id="musicCoverNotice" class="music-cover-notice" hidden>La copertina è incorporata nel file audio. Per modificarla seleziona la modalità Album.</p>
+            </div>
+          </section>
+
+          <div class="form-actions">
+            <button id="cancelButton" class="action-button" type="button">Annulla</button>
+            <button id="saveButton" class="action-button primary" type="submit">Salva</button>
+          </div>
+        </form>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

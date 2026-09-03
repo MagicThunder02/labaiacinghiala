@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Upload manager</title>
+  <link rel="stylesheet" href="/css/common-page.css">
+  <link rel="stylesheet" href="/css/library-manager.css">
+  <script src="/js/api-config.js" defer></script>
+  <script src="/js/shell-bridge.js" defer></script>
+  <script src="/js/library-manager.js" defer></script>
+  <script src="/js/music-upload-manager.js" defer></script>
+  <script src="/js/music-library-scan.js" defer></script>
+</head>
+<body>
+  <main class="page upload-page">
+    <header class="page-header upload-header">
+      <div>
+        <h1 class="page-title">Upload manager</h1>
+      </div>
+    </header>
+
+    <nav id="categoryTabs" class="category-tabs" aria-label="Categoria contenuto">
+      <button class="category-tab active" type="button" data-category="movie" aria-pressed="true">Film</button>
+      <button class="category-tab" type="button" data-category="series" aria-pressed="false">Serie</button>
+      <button class="category-tab" type="button" data-category="music" aria-pressed="false">Musica</button>
+      <button class="category-tab" type="button" data-category="books" aria-pressed="false">Libri</button>
+      <button class="category-tab" type="button" data-category="comics" aria-pressed="false">Fumetti</button>
+      <button class="category-tab" type="button" data-category="manga" aria-pressed="false">Manga</button>
+    </nav>
+
+    <section id="movieUploadPanel" class="upload-panel" aria-labelledby="moviePanelTitle">
+      <div class="panel-heading">
+        <div>
+          <h2 id="moviePanelTitle">Carica un film</h2>
+        </div>
+      </div>
+
+      <form id="movieUploadForm" class="movie-upload-form" enctype="multipart/form-data" autocomplete="off" novalidate>
+        <div class="upload-form-grid">
+          <section class="file-column" aria-label="File del film">
+            <label class="file-picker video-picker" for="videoInput">
+              <span class="picker-kicker">File video</span>
+              <strong id="videoFileName">Seleziona il film</strong>
+              <span id="videoFileInfo">MP4, MKV, WebM, MOV, AVI e altri formati supportati</span>
+              <span class="picker-button">Scegli file</span>
+            </label>
+            <input id="videoInput" name="video" type="file" accept="video/*,.mkv,.m4v,.avi,.mpeg,.mpg,.ogv" hidden required>
+
+            <label class="file-picker poster-picker" for="posterInput">
+              <span class="poster-preview-shell">
+                <img id="posterPreview" class="poster-preview" alt="Anteprima copertina" hidden>
+                <span id="posterFallback" class="poster-fallback">Copertina</span>
+              </span>
+              <span class="poster-picker-copy">
+                <strong id="posterFileName">Seleziona un’immagine</strong>
+                <span>JPG, PNG, WebP o AVIF · massimo 6 MB</span>
+                <span class="picker-button">Scegli immagine</span>
+              </span>
+            </label>
+            <input id="posterInput" name="poster" type="file" accept="image/jpeg,image/png,image/webp,image/avif" hidden required>
+          </section>
+
+          <section class="metadata-column" aria-label="Metadati del film">
+            <label class="form-field form-field-wide">
+              <span>Titolo</span>
+              <input id="titleInput" name="title" type="text" maxlength="300" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" required>
+            </label>
+
+            <label class="form-field">
+              <span>Anno</span>
+              <input id="yearInput" name="year" type="number" min="1888" max="2200" inputmode="numeric" autocomplete="off" required>
+            </label>
+
+            <label class="form-field">
+              <span>Regista</span>
+              <input id="directorInput" name="director" type="text" maxlength="500" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" required>
+            </label>
+
+            <label class="form-field form-field-wide">
+              <span>Genere</span>
+              <input id="genreInput" name="genre" type="text" maxlength="500" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Fantascienza, Avventura" required>
+              <small>Separa i generi con una virgola.</small>
+            </label>
+
+            <div class="destination-preview form-field-wide">
+              <span>Nome del file sul server</span>
+              <strong id="destinationFileName"> </strong>
+              <small id="movieDestination">Cartella Film</small>
+            </div>
+          </section>
+        </div>
+
+        <div id="uploadProgress" class="upload-progress" hidden>
+          <div class="progress-track"><span id="progressBar" class="progress-bar"></span></div>
+          <div class="progress-copy">
+            <strong id="progressLabel">Preparazione caricamento…</strong>
+            <span id="progressPercent">0%</span>
+          </div>
+        </div>
+
+        <div id="uploadMessage" class="upload-message" role="status" aria-live="polite" hidden></div>
+
+        <div class="form-actions">
+          <button id="resetButton" class="action-button" type="button">Annulla</button>
+          <button id="uploadButton" class="action-button primary" type="submit" disabled>Carica sul server</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="seriesUploadPanel" class="upload-panel" aria-labelledby="seriesPanelTitle" hidden>
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">Serie TV</p>
+          <h2 id="seriesPanelTitle">Carica episodi</h2>
+        </div>
+      </div>
+
+      <form id="seriesUploadForm" class="movie-upload-form" enctype="multipart/form-data" autocomplete="off" novalidate>
+        <div class="series-source-row">
+          <label class="form-field">
+            <span>Destinazione</span>
+            <select id="seriesModeSelect" class="manager-select">
+              <option value="new">Nuova serie</option>
+              <option value="existing">Serie già presente</option>
+            </select>
+          </label>
+          <label id="existingSeriesField" class="form-field" hidden>
+            <span>Serie</span>
+            <select id="existingSeriesSelect" class="manager-select"></select>
+          </label>
+        </div>
+
+        <div class="series-editor-layout">
+          <section class="series-items-column" aria-label="Contenuti della sessione di upload">
+            <div id="seriesUploadItemList" class="series-upload-item-list" role="listbox" aria-label="Generale ed episodi"></div>
+            <button id="seriesAddFilesButton" class="action-button series-add-files" type="button">+ Aggiungi file</button>
+            <input id="seriesVideosInput" type="file" accept="video/*,.mkv,.m4v,.avi,.mpeg,.mpg,.ogv" multiple hidden>
+            <p id="seriesFilesSummary" class="series-files-summary">Nessun episodio aggiunto.</p>
+          </section>
+
+          <section class="series-session-editor" aria-live="polite">
+            <div id="seriesGeneralEditor" class="series-editor-card">
+              <div class="series-editor-heading">
+                <div><p class="eyebrow">Serie</p><h3>Generale</h3></div>
+                <small>Informazioni comuni a tutti gli episodi.</small>
+              </div>
+
+              <div class="metadata-column series-general-fields">
+                <label class="form-field form-field-wide"><span>Titolo serie</span><input id="seriesTitleInput" type="text" maxlength="300" required></label>
+                <label class="form-field"><span>Anno</span><input id="seriesYearInput" type="number" min="1888" max="2200" inputmode="numeric" required></label>
+                <label class="form-field form-field-wide"><span>Genere</span><input id="seriesGenreInput" type="text" maxlength="500" placeholder="Drammatico, Avventura" required><small>Più generi possono essere separati da una virgola.</small></label>
+              </div>
+
+              <label id="seriesPosterPicker" class="file-picker poster-picker series-general-poster" for="seriesPosterInput">
+                <span class="poster-preview-shell">
+                  <img id="seriesPosterPreview" class="poster-preview" alt="Anteprima copertina" hidden>
+                  <span id="seriesPosterFallback" class="poster-fallback">Copertina</span>
+                </span>
+                <span class="poster-picker-copy">
+                  <span class="picker-kicker">Copertina serie</span>
+                  <strong id="seriesPosterFileName">Seleziona un’immagine</strong>
+                  <span id="seriesPosterHint">Obbligatoria per una nuova serie · massimo 6 MB</span>
+                  <span class="picker-button">Scegli immagine</span>
+                </span>
+              </label>
+              <input id="seriesPosterInput" type="file" accept="image/jpeg,image/png,image/webp,image/avif" hidden>
+
+              <div class="destination-preview">
+                <span>Cartella serie</span>
+                <strong id="seriesDestinationName">Nome serie</strong>
+                <small id="seriesDestination">Cartella Serie</small>
+              </div>
+            </div>
+
+            <div id="seriesEpisodeEditor" class="series-editor-card" hidden>
+              <div class="series-editor-heading">
+                <div><p class="eyebrow">Episodio</p><h3 id="seriesEpisodeEditorTitle">—</h3></div>
+                <small id="seriesEpisodeFileInfo">—</small>
+              </div>
+              <div class="metadata-column series-episode-fields">
+                <label class="form-field"><span>Stagione</span><input id="seriesEpisodeSeasonInput" type="number" min="1" max="999" inputmode="numeric"></label>
+                <label class="form-field"><span>Numero episodio</span><input id="seriesEpisodeNumberInput" type="number" min="1" max="999" inputmode="numeric"></label>
+                <label class="form-field form-field-wide"><span>Titolo episodio</span><input id="seriesEpisodeTitleInput" type="text" maxlength="300" placeholder="Titolo episodio"></label>
+              </div>
+              <button id="seriesRemoveEpisodeButton" class="action-button series-remove-episode" type="button">Rimuovi dalla sessione</button>
+            </div>
+          </section>
+        </div>
+
+        <div id="seriesUploadProgress" class="upload-progress" hidden>
+          <div class="progress-track"><span id="seriesProgressBar" class="progress-bar"></span></div>
+          <div class="progress-copy"><strong id="seriesProgressLabel">Preparazione caricamento…</strong><span id="seriesProgressPercent">0%</span></div>
+        </div>
+        <div id="seriesUploadMessage" class="upload-message" role="status" aria-live="polite" hidden></div>
+        <div class="form-actions">
+          <button id="seriesResetButton" class="action-button" type="button">Annulla</button>
+          <button id="seriesUploadButton" class="action-button primary" type="submit" disabled>Carica episodi</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="musicUploadPanel" class="upload-panel" aria-labelledby="musicPanelTitle" hidden>
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">Musica</p>
+          <h2 id="musicPanelTitle">Carica e verifica i brani</h2>
+        </div>
+        <p class="required-note">I tag mostrati sono quelli incorporati nei file.</p>
+      </div>
+
+      <div id="musicUploadLayout" class="music-upload-layout">
+        <section class="music-upload-sidebar" aria-label="Brani della sessione">
+          <label id="musicFilePicker" class="file-picker video-picker music-file-picker" for="musicFilesInput">
+            <span class="picker-kicker">File musicali</span>
+            <strong id="musicFilePickerTitle">Seleziona uno o più brani</strong>
+            <span id="musicFilePickerInfo">MP3, FLAC o WAV · massimo 100 file</span>
+            <span class="picker-button">Scegli file</span>
+          </label>
+          <input id="musicFilesInput" name="audio" type="file" accept=".mp3,.flac,.wav,audio/mpeg,audio/flac,audio/wav" multiple hidden>
+
+          <div class="music-session-summary">
+            <span class="stat-label">Sessione</span>
+            <strong id="musicSessionSummary">Nessun brano caricato</strong>
+            <small id="musicSessionDetail">Seleziona i file per leggere i tag reali.</small>
+          </div>
+
+          <div id="musicTrackList" class="music-track-list" role="listbox" aria-label="Brani musicali caricati">
+            <p class="music-empty-list">La sessione è vuota.</p>
+          </div>
+        </section>
+
+        <section id="musicTrackEditor" class="music-track-editor" aria-live="polite" hidden>
+          <div id="musicEditorCard" class="music-editor-card" hidden>
+            <div class="series-editor-heading music-editor-heading">
+              <div>
+                <p class="eyebrow">Tag incorporati</p>
+                <h3 id="musicEditorTitle">—</h3>
+              </div>
+              <span id="musicEditorStatus" class="music-track-status">—</span>
+            </div>
+            <p id="musicOriginalFile" class="music-original-file">—</p>
+
+            <div class="music-tag-grid">
+              <label class="form-field form-field-wide"><span>Titolo</span><input id="musicTitleInput" type="text" maxlength="500"></label>
+              <label class="form-field form-field-wide"><span>Artista del brano</span><input id="musicArtistInput" type="text" maxlength="1000" placeholder="Più artisti separati da virgola"><small>Determina gli artisti associati al singolo brano.</small></label>
+              <label class="form-field form-field-wide"><span>Album</span><input id="musicAlbumInput" type="text" maxlength="500"></label>
+              <label class="form-field form-field-wide"><span>Artista album</span><input id="musicAlbumArtistInput" type="text" maxlength="1000" placeholder="Usato per la cartella principale"><small>Se assente, viene usato l’artista del brano.</small></label>
+              <label class="form-field"><span>Numero traccia</span><input id="musicTrackNumberInput" type="number" min="1" max="9999" inputmode="numeric"></label>
+              <label class="form-field"><span>Totale tracce</span><input id="musicTrackTotalInput" type="number" min="1" max="9999" inputmode="numeric"></label>
+              <label class="form-field"><span>Numero disco</span><input id="musicDiscNumberInput" type="number" min="1" max="9999" inputmode="numeric"></label>
+              <label class="form-field"><span>Totale dischi</span><input id="musicDiscTotalInput" type="number" min="1" max="9999" inputmode="numeric"></label>
+              <label class="form-field"><span>Anno</span><input id="musicYearInput" type="number" min="1" max="9999" inputmode="numeric"></label>
+              <label class="form-field"><span>Data</span><input id="musicDateInput" type="text" maxlength="50" placeholder="AAAA o data completa"></label>
+              <label class="form-field form-field-wide"><span>Generi</span><input id="musicGenreInput" type="text" maxlength="1000" placeholder="Heavy Metal, Rock"></label>
+            </div>
+
+            <details class="music-advanced-tags">
+              <summary>Altri tag</summary>
+              <div class="music-tag-grid">
+                <label class="form-field form-field-wide"><span>Compositori</span><input id="musicComposerInput" type="text" maxlength="1000" placeholder="Più nomi separati da virgola"></label>
+                <label class="form-field form-field-wide"><span>Commento</span><input id="musicCommentInput" type="text" maxlength="2000"></label>
+                <label class="music-checkbox-field"><input id="musicCompilationInput" type="checkbox"><span>Compilation</span></label>
+              </div>
+            </details>
+
+            <div class="music-file-facts">
+              <span id="musicFormatFact">Formato: —</span>
+              <span id="musicDurationFact">Durata: —</span>
+              <span id="musicCoverFact">Copertina: —</span>
+            </div>
+
+            <div class="destination-preview music-destination-preview">
+              <span>Destinazione calcolata dal server</span>
+              <strong id="musicDestinationPath">Salva i tag obbligatori per calcolare la destinazione.</strong>
+              <small id="musicValidationMessage">Titolo, artista, album e numero traccia sono obbligatori.</small>
+            </div>
+
+            <div class="music-editor-actions">
+              <button id="musicSaveTagsButton" class="action-button" type="button">Salva tag nel file</button>
+              <button id="musicImportTrackButton" class="action-button primary" type="button">Importa brano</button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div id="musicUploadProgress" class="upload-progress" hidden>
+        <div class="progress-track"><span id="musicProgressBar" class="progress-bar"></span></div>
+        <div class="progress-copy"><strong id="musicProgressLabel">Preparazione caricamento…</strong><span id="musicProgressPercent">0%</span></div>
+      </div>
+      <div id="musicUploadMessage" class="upload-message" role="status" aria-live="polite" hidden></div>
+      <div class="form-actions music-session-actions">
+        <button id="musicCancelSessionButton" class="action-button" type="button" disabled>Annulla sessione</button>
+        <button id="musicImportReadyButton" class="action-button primary" type="button" disabled>Importa i brani pronti</button>
+      </div>
+    </section>
+
+    <section id="readingUploadPanel" class="upload-panel" aria-labelledby="readingPanelTitle" hidden>
+      <div class="panel-heading">
+        <div>
+          <p id="readingPanelEyebrow" class="eyebrow">Libri</p>
+          <h2 id="readingPanelTitle">Carica un libro</h2>
+        </div>
+      </div>
+
+      <form id="readingUploadForm" class="movie-upload-form" enctype="multipart/form-data" autocomplete="off" novalidate>
+        <div class="upload-form-grid">
+          <section class="file-column" aria-label="File di lettura">
+            <label id="readingFilePicker" class="file-picker video-picker" for="readingFileInput">
+              <span class="picker-kicker">File</span>
+              <strong id="readingFileName">Seleziona il file</strong>
+              <span id="readingFileInfo">PDF o EPUB</span>
+              <span class="picker-button">Scegli file</span>
+            </label>
+            <input id="readingFileInput" name="document" type="file" accept=".pdf,.epub" hidden required>
+
+            <label id="readingPosterPicker" class="file-picker poster-picker reading-poster-picker" for="readingPosterInput">
+              <span class="poster-preview-shell reading-cover-preview-shell">
+                <img id="readingPosterPreview" class="poster-preview" alt="Anteprima copertina" hidden>
+                <span id="readingPosterFallback" class="poster-fallback">Copertina</span>
+              </span>
+              <span class="poster-picker-copy">
+                <strong id="readingPosterFileName">Seleziona un’immagine</strong>
+                <span>JPG, PNG, WebP o AVIF · massimo 6 MB</span>
+                <span class="picker-button">Scegli immagine</span>
+              </span>
+            </label>
+            <input id="readingPosterInput" name="poster" type="file" accept="image/jpeg,image/png,image/webp,image/avif" hidden required>
+          </section>
+
+          <section class="metadata-column" aria-label="Metadati del contenuto di lettura">
+            <label class="form-field form-field-wide"><span>Titolo</span><input id="readingTitleInput" type="text" maxlength="300" required></label>
+            <label class="form-field"><span>Anno</span><input id="readingYearInput" type="number" min="1000" max="2200" inputmode="numeric" required></label>
+            <label class="form-field"><span>Autore</span><input id="readingAuthorInput" type="text" maxlength="500" required></label>
+            <label class="form-field form-field-wide"><span>Genere</span><input id="readingGenreInput" type="text" maxlength="500" placeholder="Narrativa, Fantascienza" required><small>Puoi inserire più generi separandoli con una virgola.</small></label>
+            <div class="destination-preview form-field-wide">
+              <span>Nome del file sul server</span>
+              <strong id="readingDestinationFileName"> </strong>
+              <small id="readingDestination">Cartella Libri</small>
+            </div>
+          </section>
+        </div>
+
+        <div id="readingUploadProgress" class="upload-progress" hidden>
+          <div class="progress-track"><span id="readingProgressBar" class="progress-bar"></span></div>
+          <div class="progress-copy"><strong id="readingProgressLabel">Preparazione caricamento…</strong><span id="readingProgressPercent">0%</span></div>
+        </div>
+        <div id="readingUploadMessage" class="upload-message" role="status" aria-live="polite" hidden></div>
+        <div class="form-actions">
+          <button id="readingResetButton" class="action-button" type="button">Annulla</button>
+          <button id="readingUploadButton" class="action-button primary" type="submit" disabled>Carica sul server</button>
+        </div>
+      </form>
+    </section>
+
+    <details class="maintenance-panel library-info-panel">
+      <summary>
+        <span>Info libreria</span>
+      </summary>
+      <div class="maintenance-content">
+        <section class="status-grid" aria-label="Statistiche libreria video">
+          <article class="stat-card"><span class="stat-label">Elementi video</span><strong id="totalItems" class="stat-value">—</strong></article>
+          <article class="stat-card"><span class="stat-label">Film</span><strong id="movieItems" class="stat-value">—</strong></article>
+          <article class="stat-card"><span class="stat-label">Episodi</span><strong id="seriesItems" class="stat-value">—</strong></article>
+          <article class="stat-card"><span class="stat-label">Spazio indicizzato</span><strong id="totalSize" class="stat-value">—</strong></article>
+        </section>
+
+        <section class="library-info-grid" aria-label="Informazioni libreria">
+          <article class="library-info-item">
+            <span class="stat-label">Archivio</span>
+            <strong id="storageStatus" class="library-info-value">—</strong>
+            <small id="storageDetail" class="maintenance-note">Verifica stato archivio…</small>
+          </article>
+          <article class="library-info-item">
+            <span class="stat-label">Non disponibili</span>
+            <strong id="unavailableItems" class="library-info-value">—</strong>
+          </article>
+          <article class="library-info-item library-info-formats">
+            <span class="stat-label">Formati video supportati</span>
+            <strong id="supportedFormats" class="library-info-value library-format-list">—</strong>
+          </article>
+        </section>
+      </div>
+    </details>
+
+    <details id="musicLibraryScanPanel" class="maintenance-panel library-scan-panel">
+      <summary>
+        <span>Scansione libreria</span>
+      </summary>
+      <div class="maintenance-content library-scan-content">
+        <div class="library-scan-intro">
+          <div>
+            <h2>Scansione libreria musicale</h2>
+          </div>
+          <button id="musicLibraryScanButton" class="action-button primary" type="button">Scansiona libreria musicale</button>
+        </div>
+
+        <p id="musicLibraryScanAvailability" class="maintenance-note">Verifica disponibilità della scansione…</p>
+        <div id="musicLibraryScanMessage" class="upload-message" role="status" aria-live="polite" hidden></div>
+
+        <section id="musicLibraryScanResults" class="library-scan-results" aria-label="Risultato scansione musicale" hidden>
+          <div class="library-scan-stats">
+            <article class="stat-card"><span class="stat-label">Nuovi</span><strong id="musicScanCreated" class="stat-value">0</strong></article>
+            <article class="stat-card"><span class="stat-label">Aggiornati</span><strong id="musicScanUpdated" class="stat-value">0</strong></article>
+            <article class="stat-card"><span class="stat-label">Riattivati</span><strong id="musicScanReactivated" class="stat-value">0</strong></article>
+            <article class="stat-card"><span class="stat-label">Mancanti</span><strong id="musicScanMissing" class="stat-value">0</strong></article>
+            <article class="stat-card"><span class="stat-label">Invariati</span><strong id="musicScanUnchanged" class="stat-value">0</strong></article>
+            <article class="stat-card"><span class="stat-label">Ignorati</span><strong id="musicScanIgnored" class="stat-value">0</strong></article>
+            <article class="stat-card"><span class="stat-label">Errori</span><strong id="musicScanErrors" class="stat-value">0</strong></article>
+          </div>
+          <div class="library-scan-summary">
+            <strong id="musicScanSummary">—</strong>
+            <small id="musicScanDuration">—</small>
+          </div>
+          <div id="musicScanIssuesPanel" class="library-scan-issues" hidden>
+            <h3>File ignorati o non leggibili</h3>
+            <ul id="musicScanIssues"></ul>
+            <small id="musicScanIssuesNote" class="maintenance-note"></small>
+          </div>
+        </section>
+      </div>
+    </details>
+  </main>
+</body>
+</html>

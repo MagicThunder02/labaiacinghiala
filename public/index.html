@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#3b4d1b">
+  <title>Baia Cinghiala</title>
+  <link rel="icon" type="image/x-icon" href="./favicon-v2.ico">
+  <link rel="icon" href="/assets/baia-app-icon.svg" type="image/svg+xml">
+  <link rel="icon" href="/assets/baia-app-icon-32.png" type="image/png" sizes="32x32">
+  <link rel="icon" href="/assets/baia-app-icon-48.png" type="image/png" sizes="48x48">
+  <link rel="apple-touch-icon" href="/assets/baia-app-icon-180.png" sizes="180x180">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="stylesheet" href="/css/app-shell.css">
+  <script src="/js/api-config.js" defer></script>
+  <script src="/js/account-navigation.js" defer></script>
+  <script src="/js/media-palette.js" defer></script>
+  <script src="/js/music-player-state.js" defer></script>
+  <script src="/js/music-listening-state.js" defer></script>
+  <script src="/js/music-player-visibility.js" defer></script>
+  <script src="/js/app-shell.js" defer></script>
+</head>
+<body class="auth-pending">
+  <div class="app-shell">
+    <aside id="sidebar" class="sidebar" aria-label="Navigazione principale">
+      <button class="sidebar-tab" id="sidebarTab" type="button" aria-label="Apri menu" aria-expanded="false">
+        <span class="ui-icon sidebar-tab-icon" style="--icon-url: url('/icons/sidebar-handle.svg')" aria-hidden="true"></span>
+      </button>
+
+      <div class="brand-panel">
+        <img class="brand-logo" src="/assets/baia-cinghiala.svg" alt="Baia Cinghiala">
+      </div>
+
+      <nav id="mainMenu" class="main-menu" aria-label="Sezioni"></nav>
+
+      <div class="sidebar-spacer"></div>
+
+      <nav id="quickLinks" class="quick-links" aria-label="Collegamenti rapidi"></nav>
+
+      <footer class="sidebar-footer">
+        <div id="userMenu" class="user-menu" hidden>
+          <button type="button" data-open-page="profile">Profilo</button>
+          <button type="button" id="reloadCurrentPage">Ricarica pagina</button>
+          <button type="button" id="logoutAccount">Esci dall’account</button>
+        </div>
+        <button id="profileButton" class="profile-row" type="button" aria-label="Apri profilo">
+          <span id="profileAvatar" class="profile-avatar">P</span>
+          <span id="profileName" class="profile-name">Peru</span>
+        </button>
+        <button id="profileMenuButton" class="profile-menu-button" type="button" aria-label="Menu profilo" aria-expanded="false"></button>
+        <div id="versionLabel" class="version-label">Baia Cinghiala v. 2.0</div>
+      </footer>
+    </aside>
+
+    <main class="shell-main">
+      <section id="contentArea" class="content-area" aria-live="polite">
+        <div id="loadingState" class="loading-state">Caricamento…</div>
+      </section>
+    </main>
+
+    <section id="musicFullPlayer" class="music-full-player" role="dialog" aria-modal="true" aria-label="Player musicale" hidden>
+      <div class="music-full-visual" aria-hidden="true">
+        <img id="musicFullBackdrop" class="music-full-backdrop-image" alt="" draggable="false" hidden>
+        <div class="music-full-color-wash"></div>
+        <div class="music-full-shade"></div>
+      </div>
+      <header class="music-full-topbar">
+        <button id="musicFullBackButton" class="music-full-icon-button music-full-back" type="button" aria-label="Riduci player"></button>
+        <div class="music-full-menu-wrap">
+          <button id="musicFullMenuButton" class="music-full-icon-button music-full-more" type="button" aria-label="Apri menu brano" aria-expanded="false"></button>
+          <div id="musicFullMenu" class="music-full-menu" hidden>
+            <button id="musicGoArtistButton" type="button">Vai all’artista</button>
+            <button id="musicGoAlbumButton" type="button">Vai all’album</button>
+            <button id="musicShowQueueButton" type="button">Visualizza coda</button>
+          </div>
+        </div>
+      </header>
+
+      <div class="music-full-content">
+        <div id="musicFullArtwork" class="music-full-artwork" aria-hidden="true"></div>
+        <div class="music-full-copy">
+          <h1 id="musicFullTitle">Brano senza titolo</h1>
+          <p id="musicFullSubtitle"></p>
+        </div>
+      </div>
+
+      <footer class="music-full-footer">
+        <div class="music-full-timeline">
+          <span id="musicFullCurrentTime">0:00</span>
+          <label class="sr-only" for="musicFullProgress">Posizione nel brano</label>
+          <input id="musicFullProgress" class="music-full-progress" type="range" min="0" max="0" value="0" step="0.1">
+          <span id="musicFullDuration">0:00</span>
+        </div>
+        <div class="music-full-controls">
+          <button id="musicFullModeButton" class="music-full-control music-mode-control" type="button" aria-label="Modalità normale" data-mode="normal"></button>
+          <div class="music-full-transport" aria-label="Controlli di riproduzione">
+            <button id="musicFullPreviousButton" class="music-full-control music-previous-control" type="button" aria-label="Brano precedente o ricomincia"></button>
+            <button id="musicFullPlayPauseButton" class="music-full-control music-full-play-control" type="button" aria-label="Riproduci"></button>
+            <button id="musicFullNextButton" class="music-full-control music-next-control" type="button" aria-label="Brano successivo"></button>
+          </div>
+          <div class="music-full-volume" aria-label="Volume">
+            <button id="musicFullVolumeButton" class="music-volume-button" type="button" aria-label="Disattiva audio"></button>
+            <label class="sr-only" for="musicFullVolume">Volume</label>
+            <input id="musicFullVolume" class="music-volume-range music-full-volume-range" type="range" min="0" max="1" value="1" step="0.01">
+          </div>
+        </div>
+      </footer>
+
+    </section>
+
+    <aside id="musicQueuePanel" class="music-queue-panel" aria-label="Coda di riproduzione" hidden>
+      <header class="music-queue-header">
+        <span id="musicQueueTitle" class="music-queue-eyebrow" role="heading" aria-level="2">Brani in coda</span>
+        <div class="music-queue-header-actions">
+          <button id="musicQueueClearButton" class="music-queue-clear" type="button">Svuota</button>
+          <button id="musicQueueCloseButton" class="music-full-icon-button music-queue-close" type="button" aria-label="Chiudi coda"></button>
+        </div>
+      </header>
+      <div id="musicQueueList" class="music-queue-list"></div>
+    </aside>
+
+    <section id="musicMiniPlayer" class="music-mini-player" aria-label="Player musicale" hidden>
+      <button id="musicMiniCover" class="music-mini-cover" type="button" aria-label="Apri player musicale"></button>
+      <div class="music-mini-track">
+        <strong id="musicMiniTitle" class="music-mini-title">Brano senza titolo</strong>
+        <span id="musicMiniArtist" class="music-mini-artist">Artista sconosciuto</span>
+        <div class="music-mini-progress-wrap">
+          <label class="sr-only" for="musicMiniProgress">Posizione nel brano</label>
+          <input id="musicMiniProgress" class="music-mini-progress" type="range" min="0" max="0" value="0" step="0.1">
+        </div>
+      </div>
+      <div class="music-mini-controls">
+        <button id="musicModeButton" class="music-mini-control music-mode-control" type="button" aria-label="Modalità normale" data-mode="normal"></button>
+        <button id="musicPreviousButton" class="music-mini-control music-previous-control" type="button" aria-label="Brano precedente o ricomincia"></button>
+        <button id="musicPlayPauseButton" class="music-mini-control music-play-control" type="button" aria-label="Riproduci"></button>
+        <button id="musicNextButton" class="music-mini-control music-next-control" type="button" aria-label="Brano successivo"></button>
+        <div class="music-mini-volume-wrap">
+          <button id="musicMiniVolumeButton" class="music-mini-control music-volume-button" type="button" aria-label="Disattiva audio"></button>
+          <label class="sr-only" for="musicMiniVolume">Volume</label>
+          <input id="musicMiniVolume" class="music-volume-range music-mini-volume-range" type="range" min="0" max="1" value="1" step="0.01">
+        </div>
+      </div>
+      <button id="musicMiniCollapseButton" class="music-mini-collapse" type="button" aria-label="Nascondi mini-player"></button>
+      <span id="musicPlayerStatus" class="sr-only" aria-live="polite"></span>
+      <audio id="musicAudio" preload="metadata"></audio>
+    </section>
+
+    <button id="musicMiniRestoreButton" class="music-mini-restore" type="button" aria-label="Mostra mini-player" hidden></button>
+  </div>
+
+  <section id="authGate" class="auth-gate" aria-labelledby="authTitle">
+    <div class="auth-card">
+      <img class="auth-logo" src="/assets/baia-cinghiala.svg" alt="">
+      <div class="auth-copy">
+        <p class="auth-eyebrow">Baia Cinghiala</p>
+        <h1 id="authTitle">Accesso account</h1>
+        <p id="authDescription" class="auth-description">Verifica del dispositivo e dell’account in corso…</p>
+      </div>
+
+      <div id="authLoading" class="auth-loading" role="status">
+        <span class="auth-spinner" aria-hidden="true"></span>
+        <span>Connessione a Baia…</span>
+      </div>
+
+      <form id="loginForm" class="login-form" autocomplete="on" hidden>
+        <label for="loginUsername">Username</label>
+        <input id="loginUsername" name="username" type="text" minlength="3" maxlength="64" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+        <label for="loginPassword">Password</label>
+        <input id="loginPassword" name="password" type="password" autocomplete="current-password" required>
+        <button id="loginSubmit" class="auth-primary-button" type="submit">Accedi</button>
+      </form>
+
+      <p id="authMessage" class="auth-message" role="alert" aria-live="polite"></p>
+
+      <div id="authActions" class="auth-actions" hidden>
+        <button id="authRetryButton" class="auth-secondary-button" type="button">Riprova</button>
+        <button id="authSetupButton" class="auth-secondary-button" type="button">Configura dispositivo</button>
+      </div>
+    </div>
+  </section>
+
+  <button id="sidebarBackdrop" class="sidebar-backdrop" type="button" aria-label="Chiudi menu" hidden></button>
+
+  <div id="shellToast" class="shell-toast" role="status" aria-live="polite"></div>
+</body>
+</html>

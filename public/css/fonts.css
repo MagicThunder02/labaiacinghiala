@@ -1,0 +1,15 @@
+@font-face {
+  font-family: "Outfit";
+  src: url("../fonts/Outfit-VariableFont_wght.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Gasoek One";
+  src: url("../fonts/GasoekOne-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
