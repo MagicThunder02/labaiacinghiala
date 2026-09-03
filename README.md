@@ -56,6 +56,14 @@ oppure usa:
 avvia-windows.bat
 ```
 
+## Host Linux
+
+Il percorso Direct TCP 443 è supportato anche su host Linux. Node gira come servizio systemd su
+`127.0.0.1:3000`, il Connector come servizio systemd non privilegiato sull'IPv4 LAN, porta 43127.
+Script e procedura completa: `tools/direct-host/linux/README.md`.
+
+Requisiti Linux: Node `>=24.18.1 <25`, Rust stable + Cargo, `build-essential` e `pkg-config`.
+
 ## Preflight corrente
 
 Prima di modificare la rete o aprire il router:

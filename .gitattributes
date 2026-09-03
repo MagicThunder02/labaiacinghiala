@@ -1,0 +1,3 @@
+# Gli script eseguiti sull'host Linux devono restare LF anche se il repo viene
+# clonato o modificato su Windows con core.autocrlf=true.
+*.sh text eol=lf

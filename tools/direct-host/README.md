@@ -1,5 +1,7 @@
 # Baia Direct — preparazione host Windows prima dei test Internet
 
+> Host Linux: usa `tools/direct-host/linux/` e la guida `tools/direct-host/linux/README.md`.
+
 Questi script sono strumenti di **pre-release** per arrivare al primo test reale senza esporre un Connector eseguito come utente/amministratore.
 Non sostituiscono ancora `BaiaServerSetup.exe`, che verra' costruito nella fase packaging.
 

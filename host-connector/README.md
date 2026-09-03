@@ -71,7 +71,17 @@ $env:BAIA_CONNECTOR_DATA_DIR='C:\ProgramData\Baia\HostConnector\data'
 .\baia-host-connector.exe --print-fingerprint
 ```
 
+Su Linux **non esiste un percorso di default**: `BAIA_CONNECTOR_DATA_DIR` con percorso assoluto e'
+obbligatorio, altrimenti l'avvio fallisce. L'unit systemd generata dagli script Linux lo imposta a
+`/var/lib/baia-connector`.
+
 Non cancellare o rigenerare l'identita per risolvere problemi di rete.
+
+## Preparazione Linux pre-test
+
+Usare gli script in `tools/direct-host/linux/`: creano utente di sistema dedicato, directory binario
+root-owned, data dir riservata, regola firewall e unit systemd con privilegi minimi.
+La procedura completa e' in `tools/direct-host/linux/README.md`.
 
 ## Preparazione Windows pre-test
 
