@@ -417,3 +417,22 @@ body { overflow: hidden; }
 .cover-remove-button:hover:not(:disabled) { background: rgba(151, 52, 44, .34); color: #fff; }
 .cover-remove-button:disabled { opacity: .45; cursor: default; }
 .music-album-editor-mode .poster-file-name { min-height: 18px; }
+
+
+/* Eliminazione definitiva dei contenuti dall'editor metadati. */
+.form-actions-spacer { flex: 1 1 auto; }
+.action-button.danger {
+  border-color: rgba(220, 91, 80, .48);
+  background: rgba(137, 42, 35, .24);
+  color: #f3c1bc;
+}
+.action-button.danger:hover:not(:disabled) {
+  border-color: rgba(232, 112, 101, .7);
+  background: rgba(164, 49, 40, .42);
+  color: #fff;
+}
+.action-button.danger:disabled { opacity: .48; cursor: default; }
+@media (hover: none) and (pointer: coarse) and (max-width: 620px) {
+  .form-actions-spacer { display: none; }
+  .form-actions .action-button.danger { flex-basis: 100%; }
+}
