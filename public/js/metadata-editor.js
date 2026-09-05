@@ -62,6 +62,7 @@ const elements = {
   posterUploadControls: document.querySelector('#posterUploadControls'),
   musicCoverRemove: document.querySelector('#musicCoverRemoveButton'),
   musicCoverNotice: document.querySelector('#musicCoverNotice'),
+  delete: document.querySelector('#deleteButton'),
   cancel: document.querySelector('#cancelButton'),
   save: document.querySelector('#saveButton'),
 };
@@ -453,6 +454,8 @@ function fillForm(item) {
   elements.posterInput.value = '';
   elements.posterFileName.textContent = 'Nessun nuovo file selezionato';
   elements.musicCoverRemove.disabled = item.kind !== 'music-album' || item.hasCoverArt !== true;
+  elements.delete.hidden = item.kind === 'episode' || item.kind === 'music-track';
+  elements.delete.disabled = false;
   elements.empty.hidden = true;
   elements.form.hidden = false;
   setEditorMode(item);
@@ -514,6 +517,8 @@ function clearSelection() {
   state.coverRequestSerial += 1;
   clearPosterObjectUrl();
   clearMusicCoverObjectUrl();
+  elements.delete.hidden = true;
+  elements.delete.disabled = true;
   elements.form.hidden = true;
   elements.empty.hidden = false;
 }
@@ -605,6 +610,57 @@ function musicAlbumMetadataBody() {
     coverDataUrl: state.musicCoverAction === 'replace' ? state.posterDataUrl : null,
   };
 }
+function deleteTargetLabel(item) {
+  if (!item) return 'questo contenuto';
+  if (item.kind === 'music-album') return `l’album “${item.current?.album || item.current?.title || 'senza titolo'}”`;
+  if (item.kind === 'series') return `la serie “${item.current?.title || 'senza titolo'}”`;
+  if (item.kind === 'reading') return `${categoryLabel(item.category).toLowerCase()} “${item.current?.title || 'senza titolo'}”`;
+  return `il film “${item.current?.title || 'senza titolo'}”`;
+}
+async function deleteSelectedContent() {
+  const item = state.selected;
+  if (!state.selectedId || !item || item.kind === 'episode' || item.kind === 'music-track') return;
+  const target = deleteTargetLabel(item);
+  const confirmed = window.confirm(
+    `Eliminare definitivamente ${target}?
+
+Verranno eliminati sia la cartella nella libreria media sia i relativi record nel database. Questa operazione non può essere annullata.`,
+  );
+  if (!confirmed) return;
+
+  elements.delete.disabled = true;
+  elements.cancel.disabled = true;
+  elements.save.disabled = true;
+  elements.delete.textContent = 'Eliminazione…';
+  try {
+    const endpoint = item.kind === 'music-album'
+      ? `/api/metadata/music/albums/${encodeURIComponent(item.albumId)}`
+      : `/api/metadata/items/${encodeURIComponent(state.selectedId)}`;
+    const payload = await window.BaiaPage.apiRequest(endpoint, { method: 'DELETE' });
+    const deletedCategory = item.kind === 'music-album' ? 'music' : item.category;
+    clearSelection();
+    await loadItems();
+    window.BaiaPage.shellToast(payload.deleted?.cleanupPending
+      ? 'Contenuto rimosso. La pulizia finale dei file temporanei sarà completata dal server.'
+      : 'Contenuto eliminato definitivamente');
+    if (window.parent !== window) {
+      window.parent.postMessage({
+        type: 'shell-metadata-updated',
+        itemId: payload.deleted?.id || null,
+        albumId: payload.deleted?.albumId || null,
+        category: deletedCategory || null,
+        deleted: true,
+      }, window.location.origin);
+    }
+  } catch (error) {
+    window.BaiaPage.shellToast(error.message);
+  } finally {
+    elements.delete.textContent = 'Elimina';
+    elements.delete.disabled = !state.selected || state.selected.kind === 'episode' || state.selected.kind === 'music-track';
+    elements.cancel.disabled = false;
+    elements.save.disabled = false;
+  }
+}
 function updateSaveButtonLabel() {
   elements.save.textContent = state.selected?.kind === 'music-album'
     ? `Salva su ${Number(state.selected.trackCount) || 0} brani`
@@ -615,6 +671,7 @@ async function saveMetadata(event) {
   if (!state.selectedId || !elements.form.reportValidity()) return;
   elements.save.disabled = true;
   elements.cancel.disabled = true;
+  elements.delete.disabled = true;
   elements.save.textContent = 'Salvataggio…';
   try {
     let body;
@@ -665,6 +722,7 @@ async function saveMetadata(event) {
   finally {
     elements.save.disabled = false;
     elements.cancel.disabled = false;
+    elements.delete.disabled = !state.selected || state.selected.kind === 'episode' || state.selected.kind === 'music-track';
     updateSaveButtonLabel();
   }
 }
@@ -695,6 +753,7 @@ elements.search.addEventListener('input', () => {
 });
 elements.posterInput.addEventListener('change', handlePosterSelection);
 elements.musicCoverRemove.addEventListener('click', handleMusicCoverRemoval);
+elements.delete.addEventListener('click', deleteSelectedContent);
 elements.cancel.addEventListener('click', resetForm);
 elements.form.addEventListener('submit', saveMetadata);
 window.addEventListener('beforeunload', () => {

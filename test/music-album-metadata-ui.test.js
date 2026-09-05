@@ -50,6 +50,6 @@ test('API album usa il lock condiviso e un’operazione backend atomica con roll
   assert.match(service, /ROLLBACK/);
   assert.match(service, /fs\.rename\(entry\.originalPath, entry\.backupPath\)/);
   assert.match(service, /fs\.rename\(entry\.stagedPath, entry\.plan\.destinationPath\)/);
-  assert.doesNotMatch(musicRoute, /router\.(?:patch|delete)\(/);
+  assert.match(musicRoute, /router\.delete\('\/albums\/:albumId'/);
   assert.doesNotMatch(musicRoute, /file_path|directory_path|relative_path/i);
 });

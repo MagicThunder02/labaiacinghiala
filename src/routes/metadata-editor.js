@@ -18,6 +18,12 @@ const { SERIES_STORAGE_VERSION, stageSeriesMetadataChange } = require('../servic
 const { READING_CATEGORIES } = require('../reading-formats');
 const { READING_STORAGE_VERSION, stageReadingMetadataChange } = require('../services/reading-metadata-service');
 const { getProfileKey } = require('../utils/profile-key');
+const {
+  ContentDeleteError,
+  deleteMovie,
+  deleteSeries,
+  deleteReading,
+} = require('../services/content-delete-service');
 const { listMusicAlbums, listMusicTracks } = require('../services/music-catalog-service');
 const {
   relativePathFromAbsolute,
@@ -326,6 +332,24 @@ router.get('/items/:entityId', (req, res) => {
   const row = getItem.get(entity.id);
   if (!row) return res.status(404).json({ error: 'Contenuto non trovato.' });
   return res.json({ item: entity.kind === 'episode' ? serializeEpisodeDetail(row) : serializeMovieDetail(row) });
+});
+
+
+router.delete('/items/:entityId', async (req, res, next) => {
+  const entity = parseEntityId(req.params.entityId);
+  try {
+    let deleted;
+    if (entity.kind === 'movie') deleted = await deleteMovie(entity.id);
+    else if (entity.kind === 'series') deleted = await deleteSeries(entity.id);
+    else if (entity.kind === 'reading') deleted = await deleteReading(entity.id);
+    else return res.status(400).json({ error: 'Gli episodi non possono essere eliminati singolarmente dall’editor metadati.' });
+    return res.json({ deleted });
+  } catch (error) {
+    if (error instanceof ContentDeleteError) {
+      return res.status(error.statusCode || 409).json({ error: error.message, code: error.code });
+    }
+    return next(error);
+  }
 });
 
 router.get('/items/:id/automatic-poster', async (req, res, next) => {
