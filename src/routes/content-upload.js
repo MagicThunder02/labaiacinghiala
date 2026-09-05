@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const multer = require('multer');
+const { allowLongUpload } = require('../http-timeouts');
 const config = require('../config');
 const db = require('../database');
 const { SUPPORTED_EXTENSIONS } = require('../media-formats');
@@ -95,9 +96,12 @@ async function cleanupRequestFiles(req) {
 }
 
 function receiveMultipart(req, res, next) {
+  allowLongUpload(req);
   multipartUpload(req, res, async (error) => {
     if (!error) return next();
     await cleanupRequestFiles(req);
+    // A receipt timeout may already have sent 408 and closed the connection.
+    if (req.destroyed || res.headersSent || res.destroyed) return;
     if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
       return res.status(413).json({ error: 'Il file supera il limite configurato sul server.' });
     }
