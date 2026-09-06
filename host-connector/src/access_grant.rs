@@ -184,7 +184,7 @@ pub fn verify_request_authorization(
         return Err("Autorizzazione dispositivo scaduta al perimetro Connector.".to_string());
     }
     decode_canonical_base64url(nonce, NONCE_BYTES, "Nonce dispositivo")?;
-    if !matches!(method, "GET" | "HEAD" | "POST" | "PUT") {
+    if !matches!(method, "GET" | "HEAD" | "POST" | "PUT" | "DELETE") {
         return Err("Metodo autorizzazione trasporto non valido.".to_string());
     }
 
