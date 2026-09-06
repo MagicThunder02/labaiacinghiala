@@ -36,7 +36,7 @@ fn unix_seconds() -> Result<u64, String> {
 
 fn normalize_method(value: &str) -> Result<String, String> {
     let method = value.trim().to_ascii_uppercase();
-    if matches!(method.as_str(), "GET" | "HEAD" | "POST" | "PUT") {
+    if matches!(method.as_str(), "GET" | "HEAD" | "POST" | "PUT" | "DELETE") {
         Ok(method)
     } else {
         Err("Metodo richiesta non autorizzabile.".to_string())
@@ -220,7 +220,8 @@ mod tests {
             "BAIA-REQ-V1\ndevice\n123\nnonce\nGET\n/api/movies?limit=10"
         );
         assert_eq!(normalize_method(" put ").unwrap(), "PUT");
-        assert!(normalize_method("DELETE").is_err());
+        assert_eq!(normalize_method("DELETE").unwrap(), "DELETE");
+        assert!(normalize_method("PATCH").is_err());
     }
 
     #[test]

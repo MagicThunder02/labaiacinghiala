@@ -215,6 +215,7 @@ fn normalize_method(value: &str) -> Result<Method, String> {
         "HEAD" => Ok(Method::HEAD),
         "POST" => Ok(Method::POST),
         "PUT" => Ok(Method::PUT),
+        "DELETE" => Ok(Method::DELETE),
         _ => Err("Metodo API non consentito dal Transport Manager.".to_string()),
     }
 }
@@ -366,7 +367,9 @@ mod tests {
         let get = normalize_method("get").unwrap();
         assert!(normalize_body(&get, None).is_ok());
         assert!(normalize_body(&get, Some("payload".to_string())).is_err());
-        assert!(normalize_method("DELETE").is_err());
+        let delete = normalize_method("DELETE").unwrap();
+        assert!(normalize_body(&delete, None).is_ok());
+        assert!(normalize_method("PATCH").is_err());
     }
 
     #[test]
