@@ -32,6 +32,7 @@
     <section id="movieUploadPanel" class="upload-panel" aria-labelledby="moviePanelTitle">
       <div class="panel-heading">
         <div>
+          <p class="eyebrow">Film</p>
           <h2 id="moviePanelTitle">Carica un film</h2>
         </div>
       </div>
@@ -149,7 +150,7 @@
               <div class="metadata-column series-general-fields">
                 <label class="form-field form-field-wide"><span>Titolo serie</span><input id="seriesTitleInput" type="text" maxlength="300" required></label>
                 <label class="form-field"><span>Anno</span><input id="seriesYearInput" type="number" min="1888" max="2200" inputmode="numeric" required></label>
-                <label class="form-field form-field-wide"><span>Genere</span><input id="seriesGenreInput" type="text" maxlength="500" placeholder="Drammatico, Avventura" required><small>Più generi possono essere separati da una virgola.</small></label>
+                <label class="form-field form-field-wide"><span>Genere</span><input id="seriesGenreInput" type="text" maxlength="500" placeholder="Drammatico, Avventura" required><small>Separa i generi con una virgola.</small></label>
               </div>
 
               <label id="seriesPosterPicker" class="file-picker poster-picker series-general-poster" for="seriesPosterInput">
@@ -206,7 +207,7 @@
           <p class="eyebrow">Musica</p>
           <h2 id="musicPanelTitle">Carica e verifica i brani</h2>
         </div>
-        <p class="required-note">I tag mostrati sono quelli incorporati nei file.</p>
+        <p class="required-note"> </p>
       </div>
 
       <div id="musicUploadLayout" class="music-upload-layout">
@@ -332,7 +333,7 @@
             <label class="form-field form-field-wide"><span>Titolo</span><input id="readingTitleInput" type="text" maxlength="300" required></label>
             <label class="form-field"><span>Anno</span><input id="readingYearInput" type="number" min="1000" max="2200" inputmode="numeric" required></label>
             <label class="form-field"><span>Autore</span><input id="readingAuthorInput" type="text" maxlength="500" required></label>
-            <label class="form-field form-field-wide"><span>Genere</span><input id="readingGenreInput" type="text" maxlength="500" placeholder="Narrativa, Fantascienza" required><small>Puoi inserire più generi separandoli con una virgola.</small></label>
+            <label class="form-field form-field-wide"><span>Genere</span><input id="readingGenreInput" type="text" maxlength="500" placeholder="Narrativa, Fantascienza" required><small>Separa i generi con una virgola.</small></label>
             <div class="destination-preview form-field-wide">
               <span>Nome del file sul server</span>
               <strong id="readingDestinationFileName"> </strong>

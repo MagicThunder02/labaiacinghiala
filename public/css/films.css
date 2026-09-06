@@ -12,7 +12,7 @@
   --detail-color-c: 164, 88, 72;
   --detail-color-d: 126, 103, 176;
   --vertical-rail-card-gap: clamp(8px, .65vw, 11px);
-  --vertical-rail-title-gap: 6px;
+  --vertical-rail-title-gap: 4px;
   --vertical-rail-section-gap: 18px;
 }
 
@@ -211,7 +211,7 @@ button, input { font: inherit; }
 
 .showcase-section + .showcase-section { margin-top: 44px; }
 .section-heading { margin-bottom: 15px; }
-.section-heading h2 { margin: 0; font-size: clamp(18px, 2vw, 24px); }
+.section-heading h2 { margin: 0; font-size: clamp(14px, 1.25vw, 18px); }
 .showcase-shell {
   --rail-arrow-width: clamp(24px, 3vw, 40px);
   --rail-arrow-gap: clamp(8px, 1vw, 16px);
@@ -2997,3 +2997,107 @@ body.film-search-open .film-search-launcher-wrap {
   }
 }
 
+
+/* ============================================================
+   DETTAGLIO FILM — GEOMETRIA VERTICALE STABILE
+   Riparte dal CSS originale: il poster determina l'altezza della riga,
+   mentre la colonna destra usa uno spacer elastico. In questo modo il
+   bordo inferiore delle card "Film simili" resta allineato al poster
+   anche quando il titolo passa da una a più righe e indipendentemente
+   dall'altezza disponibile nella WebView.
+   ============================================================ */
+@media (min-width: 761px) {
+  .films-page:not(.series-page) .film-detail-view {
+    /* Profilo compatto stabile: non dipende da vh, quindi la barra di
+       avviso del WebView non cambia più la scala relativa del hero. */
+    --stable-detail-poster: clamp(240px, 20vw, 300px);
+  }
+
+  .films-page:not(.series-page) .detail-content {
+    width: min(1510px, calc(100% - 52px));
+    min-height: calc(100dvh - 112px);
+    margin: 68px auto 0;
+    padding-bottom: 30px;
+    grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+    align-items: stretch;
+    align-content: center;
+    gap: clamp(30px, 3.5vw, 54px);
+  }
+
+  .films-page:not(.series-page) .detail-poster-shell {
+    width: var(--stable-detail-poster);
+    height: auto;
+    min-height: 0;
+    aspect-ratio: 2 / 3;
+    align-self: start;
+    justify-self: end;
+  }
+
+  .films-page:not(.series-page) .detail-side {
+    width: var(--premium-detail-copy);
+    max-width: 100%;
+    height: auto;
+    min-height: 0;
+    align-self: stretch;
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    gap: 0;
+  }
+
+  .films-page:not(.series-page) .detail-heading {
+    grid-row: 1;
+    align-self: start;
+  }
+
+  .films-page:not(.series-page) .detail-heading h1 {
+    max-width: 900px;
+    font-size: clamp(32px, 3.4vw, 50px);
+    line-height: .98;
+    letter-spacing: -.03em;
+  }
+
+  .films-page:not(.series-page) .detail-heading p {
+    margin-top: 10px;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+
+  .films-page:not(.series-page) .detail-actions {
+    grid-row: 2;
+    margin-top: 16px;
+  }
+
+  .films-page:not(.series-page) .detail-action {
+    min-height: 44px;
+  }
+
+  .films-page:not(.series-page) .detail-similar-section {
+    grid-row: 4;
+    margin-top: 0;
+    align-self: end;
+  }
+
+  .films-page:not(.series-page) .detail-similar-heading {
+    margin-bottom: 4px;
+  }
+
+  .films-page:not(.series-page) .detail-similar-heading h2 {
+    font-size: clamp(15px, 1.1vw, 19px);
+    line-height: 1.15;
+  }
+
+  .films-page:not(.series-page) .detail-similar-rail {
+    grid-auto-columns: clamp(100px, 7.5vw, 118px);
+    gap: clamp(8px, .65vw, 11px);
+    align-items: end;
+  }
+}
+
+/* Il rail desktop lascia 40px di padding sotto le card e li compensa con
+   un margine negativo di 36px per il glow: i 4px residui vengono corretti
+   qui, così il bordo visibile della card coincide con quello del poster. */
+@media (hover: hover) and (pointer: fine) and (min-width: 761px) {
+  .films-page:not(.series-page) .detail-similar-section {
+    transform: translateY(4px);
+  }
+}
