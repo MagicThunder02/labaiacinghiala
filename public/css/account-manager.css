@@ -65,7 +65,7 @@
 .form-field input:focus,
 .form-field select:focus {
   border-color: rgba(111, 151, 61, .95);
-  box-shadow: 0 0 0 3px rgba(93, 128, 48, .18);
+  box-shadow: 0 0 0 3px rgba(115, 166, 61, .18);
 }
 .account-list { padding: 10px; overflow: auto; }
 .account-list-item {
@@ -84,7 +84,7 @@
 .account-list-item:hover { background: rgba(255, 255, 255, .05); }
 .account-list-item.active {
   border-color: rgba(122, 161, 73, .62);
-  background: rgba(93, 128, 48, .2);
+  background: rgba(115, 166, 61, .2);
 }
 .account-list-name { min-width: 0; font-size: 15px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account-list-username { grid-column: 1; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -101,7 +101,7 @@
   font-size: 11px;
   font-weight: 800;
 }
-.account-role-chip.admin { background: rgba(93, 128, 48, .35); color: #dcedc5; }
+.account-role-chip.admin { background: rgba(115, 166, 61, .35); color: #dcedc5; }
 .account-list-devices { color: var(--muted); font-size: 11px; }
 .account-list-item.disabled { opacity: .62; }
 .account-empty { padding: 30px 20px; color: var(--muted); text-align: center; }
@@ -110,7 +110,7 @@
 .editor-heading h2 { margin: 0; font-size: clamp(24px, 3vw, 34px); }
 .editor-heading p:last-child { margin: 8px 0 0; color: var(--muted); }
 .account-status.disabled { background: rgba(187, 70, 70, .28); color: #ffd0d0; }
-.account-status.active { background: rgba(93, 128, 48, .34); color: #dcedc5; }
+.account-status.active { background: rgba(115, 166, 61, .34); color: #dcedc5; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .form-field { display: grid; align-content: start; gap: 7px; color: #eee; font-size: 13px; font-weight: 700; }
 .form-field-wide { grid-column: span 2; }
@@ -218,7 +218,7 @@
   cursor: pointer;
 }
 .manager-tab:hover { color: #fff; background: rgba(255, 255, 255, .05); }
-.manager-tab.active { color: #eef7e4; background: rgba(93, 128, 48, .42); }
+.manager-tab.active { color: #eef7e4; background: rgba(115, 166, 61, .42); }
 .manager-tabs [hidden],
 .accounts-header > [hidden],
 #accountsPanel[hidden],
@@ -370,7 +370,7 @@
   font-weight: 900;
   text-transform: uppercase;
 }
-.invite-status.active { background: rgba(93, 128, 48, .38); color: #e4f5ce; }
+.invite-status.active { background: rgba(115, 166, 61, .38); color: #e4f5ce; }
 .invite-status.used { background: rgba(73, 119, 157, .34); color: #d7ecff; }
 .invite-status.expired { background: rgba(138, 112, 57, .32); color: #f2dfb4; }
 .invite-status.revoked { background: rgba(151, 66, 66, .34); color: #ffd0d0; }
@@ -469,7 +469,7 @@
   font-weight: 900;
   text-transform: uppercase;
 }
-.device-status.active { background: rgba(93, 128, 48, .38); color: #e4f5ce; }
+.device-status.active { background: rgba(115, 166, 61, .38); color: #e4f5ce; }
 .device-status.revoked { background: rgba(151, 66, 66, .34); color: #ffd0d0; }
 .device-details {
   display: grid;
@@ -527,4 +527,192 @@
   .device-filter select { width: 100%; }
   .device-details { grid-template-columns: 1fr; }
   .device-actions .danger-button { width: 100%; }
+}
+
+/* ============================================================
+   BAIA UTILITY UI 2026 — Gestione account
+   Tab centrati, browser neutro e editor glass senza cornici pesanti.
+   ============================================================ */
+.manager-tabs {
+  position: sticky;
+  z-index: 24;
+  top: calc(var(--utility-header-height) + 12px);
+  justify-content: center;
+  gap: 4px;
+  margin: 12px auto 24px;
+  padding: 5px;
+  width: max-content;
+  border: 0;
+  border-radius: 13px;
+  background: rgba(234, 239, 231, .075);
+  box-shadow: var(--utility-shadow-soft);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  backdrop-filter: blur(18px) saturate(1.08);
+}
+.manager-tab {
+  min-height: 38px;
+  border-radius: 9px;
+  color: rgba(255, 255, 255, .64);
+  font-weight: 650;
+}
+.manager-tab:hover { color: #fff; background: rgba(255, 255, 255, .07); }
+.manager-tab.active {
+  color: #f5faef;
+  background: rgba(127, 178, 73, .30);
+}
+
+.accounts-layout {
+  gap: 14px;
+  min-height: 620px;
+  border: 0;
+  overflow: visible;
+  background: transparent;
+}
+.accounts-browser,
+.account-editor,
+.invite-create-card,
+.invite-history-card,
+.device-management-card {
+  border: 0;
+  border-radius: var(--utility-radius);
+  background: var(--utility-glass);
+  box-shadow: var(--utility-shadow);
+  -webkit-backdrop-filter: blur(16px) saturate(1.04);
+  backdrop-filter: blur(16px) saturate(1.04);
+}
+.accounts-browser { background: rgba(234, 239, 231, .062); }
+.account-editor { background: rgba(234, 239, 231, .042); }
+.accounts-browser-heading,
+.invite-history-heading,
+.device-management-heading { border-bottom: 0; }
+
+.account-search,
+.form-field input,
+.form-field select,
+.invite-filter select,
+.device-filter select {
+  border: 0;
+  border-radius: var(--utility-control-radius);
+  background: var(--utility-input);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .025);
+  -webkit-backdrop-filter: blur(10px) saturate(1.03);
+  backdrop-filter: blur(10px) saturate(1.03);
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+.account-search:focus,
+.form-field input:focus,
+.form-field select:focus,
+.invite-filter select:focus,
+.device-filter select:focus {
+  border: 0;
+  outline: none;
+  background: rgba(244, 248, 241, .105);
+  box-shadow: 0 0 0 2px rgba(127, 178, 73, .30);
+}
+
+.account-list { padding: 8px; }
+.account-list-item {
+  margin: 2px 0;
+  border: 0;
+  border-radius: 10px;
+}
+.account-list-item:hover { background: rgba(255, 255, 255, .055); }
+.account-list-item.active {
+  border: 0;
+  background: rgba(127, 178, 73, .16);
+  box-shadow: none;
+}
+.accounts-kicker,
+.editor-eyebrow { color: rgba(165, 205, 124, .86); }
+.editor-heading h2 { font-weight: 680; letter-spacing: -.012em; }
+
+.switch-field,
+.sections-fieldset,
+.security-card,
+.danger-card,
+.created-invite-panel,
+.invite-list-item,
+.device-list-item {
+  border: 0;
+  background: rgba(234, 239, 231, .040);
+}
+.switch-field { border-radius: 10px; }
+.sections-fieldset { border-radius: 12px; }
+.section-choices label { background: rgba(234, 239, 231, .046); }
+.security-card,
+.danger-card { border-radius: 12px; }
+.existing-security { border-top-color: rgba(255, 255, 255, .045); }
+
+.account-role-chip.admin,
+.account-status.active,
+.invite-status.active,
+.device-status.active {
+  background: rgba(127, 178, 73, .20);
+  color: #e7f3da;
+}
+
+.invites-layout { gap: 14px; }
+.invite-create-card { background: rgba(234, 239, 231, .052); }
+.invite-history-card,
+.device-management-card { background: rgba(234, 239, 231, .042); }
+.created-invite-panel { background: rgba(127, 178, 73, .10); }
+.created-invite-token {
+  border: 0;
+  background: rgba(0, 0, 0, .18);
+}
+.invite-list,
+.device-list { gap: 7px; }
+.invite-list-item,
+.device-list-item { border-radius: 11px; }
+.invite-actions,
+.device-actions { border-top-color: rgba(255, 255, 255, .045); }
+
+@media (max-width: 940px) {
+  .accounts-layout { gap: 12px; }
+  .accounts-browser { border-bottom: 0; }
+}
+@media (max-width: 720px) {
+  .manager-tabs {
+    top: calc(var(--utility-header-height) + 8px);
+    width: calc(100% - 4px);
+    justify-content: stretch;
+  }
+  .manager-tab { flex: 1 1 0; min-width: 0; }
+}
+
+/* Le azioni distruttive restano riconoscibili, ma senza tornare alla card bordata. */
+.danger-card {
+  border: 0;
+  background: rgba(126, 43, 36, .14);
+}
+@media (max-width: 720px) {
+  .manager-tab { padding-inline: 8px; font-size: 12px; }
+}
+
+
+/* ============================================================
+   RIFINITURE ACCOUNT — allineamenti card
+   ============================================================ */
+/* Un fieldset senza bordo mantiene per default il legend a cavallo del bordo:
+   lo reinseriamo nel flusso della superficie glass. */
+.sections-fieldset legend {
+  float: left;
+  width: 100%;
+  margin: 0 0 14px;
+  padding: 0;
+}
+.sections-fieldset > p {
+  clear: both;
+}
+
+/* Il testo di aiuto sotto la durata non deve trascinare verso il basso
+   il pulsante: il bottone si allinea all'input numerico. */
+.invite-form { align-items: start; }
+.invite-form .action-button {
+  align-self: start;
+  margin-top: 23px;
+}
+
+@media (max-width: 720px) {
+  .invite-form .action-button { margin-top: 0; }
 }
