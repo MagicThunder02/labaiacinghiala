@@ -54,7 +54,7 @@
   overflow: hidden;
   background:
     radial-gradient(circle at 30% 25%, rgba(255, 255, 255, .12), transparent 24%),
-    linear-gradient(145deg, #5d8030, #3b4d1b 58%, #292929);
+    linear-gradient(145deg, #73a63d, #496825 58%, #292929);
 }
 .poster::after { content: ""; position: absolute; inset: 0; background: linear-gradient(transparent 55%, rgba(0, 0, 0, .62)); }
 .poster-initials { max-width: 82%; font-size: clamp(31px, 5vw, 58px); font-weight: 900; letter-spacing: -.08em; opacity: .9; }
@@ -94,7 +94,7 @@
 .movie-series { margin: 5px 0 0; overflow: hidden; color: #d8e3cc; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .movie-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; color: var(--muted); font-size: 12px; }
 .progress-track { height: 3px; margin-top: 10px; overflow: hidden; border-radius: 99px; background: rgba(255, 255, 255, .13); }
-.progress-bar { height: 100%; background: #7ba641; }
+.progress-bar { height: 100%; background: #8cbd50; }
 .player-dialog {
   width: min(1100px, calc(100vw - 24px));
   max-height: calc(100vh - 24px);

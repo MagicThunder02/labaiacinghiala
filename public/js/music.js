@@ -176,6 +176,11 @@
     elements.loading.hidden = !visible;
   }
 
+  function syncShellDetailBack() {
+    const detailOpen = !elements.albumDetailView.hidden || !elements.artistDetailView.hidden || !elements.playlistDetailView.hidden;
+    window.BaiaPage.shellContextBack?.(detailOpen);
+  }
+
   function setBrowseMode(mode, title) {
     state.mode = mode;
     const searching = mode === 'search';
@@ -194,6 +199,7 @@
     elements.artistsButton.classList.toggle('active', navigationMode === 'artists');
     elements.genreButton.classList.toggle('active', navigationMode === 'genres' || navigationMode === 'genre');
     elements.genreButton.classList.toggle('has-filter', Boolean(state.activeGenre));
+    syncShellDetailBack();
   }
 
   function cardMeta(item, type) {
@@ -663,6 +669,7 @@
       elements.albumDetailView.hidden = true;
       elements.artistDetailView.hidden = true;
       elements.playlistDetailView.hidden = false;
+      syncShellDetailBack();
     } catch (error) {
       window.BaiaPage.shellToast(error.message);
     } finally {
@@ -1019,6 +1026,7 @@
       elements.artistDetailView.hidden = true;
       elements.playlistDetailView.hidden = true;
       elements.albumDetailView.hidden = false;
+      syncShellDetailBack();
     } catch (error) {
       window.BaiaPage.shellToast(error.message);
     } finally {
@@ -1049,6 +1057,7 @@
       elements.albumDetailView.hidden = true;
       elements.playlistDetailView.hidden = true;
       elements.artistDetailView.hidden = false;
+      syncShellDetailBack();
     } catch (error) {
       window.BaiaPage.shellToast(error.message);
     } finally {
@@ -1061,6 +1070,7 @@
     elements.artistDetailView.hidden = true;
     elements.playlistDetailView.hidden = true;
     elements.browseView.hidden = false;
+    syncShellDetailBack();
     requestAnimationFrame(() => window.scrollTo({ top: state.detailReturnScrollY || 0, behavior: 'auto' }));
   }
 
@@ -1428,6 +1438,15 @@
 
   window.addEventListener('message', (event) => {
     if (event.origin !== window.location.origin) return;
+    if (event.data?.type === 'shell-context-back-request') {
+      const detailOpen = !elements.albumDetailView.hidden || !elements.artistDetailView.hidden || !elements.playlistDetailView.hidden;
+      if (detailOpen) returnFromDetail();
+      return;
+    }
+    if (event.data?.type === 'shell-page-visibility') {
+      if (event.data.active === true) syncShellDetailBack();
+      return;
+    }
     if (event.data?.type === 'shell-music-state') {
       state.player = event.data.state || state.player;
       syncPlayingRows();

@@ -1,0 +1,233 @@
+/* ============================================================
+   BAIA UTILITY UI 2026 — Profilo
+   Identità personale + schede tecniche leggere nello stesso vetro Baia.
+   ============================================================ */
+.profile-page {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+.profile-header { align-items: center; }
+
+.profile-page .info-card {
+  border: 0;
+  border-radius: var(--utility-radius);
+  background: var(--utility-glass);
+  box-shadow: var(--utility-shadow);
+  -webkit-backdrop-filter: blur(16px) saturate(1.04);
+  backdrop-filter: blur(16px) saturate(1.04);
+}
+.profile-page .info-card + .info-card,
+.profile-page .device-card,
+.profile-page .connection-settings,
+.profile-page .pairing-settings { margin-top: 16px; }
+
+.profile-account-card { padding: clamp(22px, 3vw, 34px); }
+.profile-identity {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+.profile-avatar-large {
+  width: 78px;
+  height: 78px;
+  flex: 0 0 78px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(234, 239, 231, .10);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, .20), inset 0 0 0 1px rgba(255, 255, 255, .07);
+  color: #f8fbf5;
+  font-size: 30px;
+  font-weight: 720;
+  text-transform: uppercase;
+  -webkit-backdrop-filter: blur(16px) saturate(1.06);
+  backdrop-filter: blur(16px) saturate(1.06);
+}
+.profile-identity-copy { min-width: 0; }
+.profile-identity-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+.profile-identity-heading h2 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: clamp(24px, 3vw, 34px);
+  font-weight: 680;
+  letter-spacing: -.015em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.section-kicker {
+  margin: 0;
+  color: rgba(165, 205, 124, .86);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.role-badge {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(127, 178, 73, .18);
+  color: #e7f3da;
+  font-size: 11px;
+  font-weight: 800;
+}
+.card-message {
+  margin: 7px 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.profile-page .section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.profile-page .section-heading h2 {
+  margin: 2px 0 0;
+  font-size: 21px;
+  font-weight: 680;
+  letter-spacing: -.01em;
+}
+
+.profile-details {
+  display: grid;
+  grid-template-columns: minmax(160px, 205px) minmax(0, 1fr);
+  margin: 0;
+  column-gap: 22px;
+}
+.profile-details dt,
+.profile-details dd {
+  min-width: 0;
+  margin: 0;
+  padding: 12px 0;
+  border-top: 1px solid rgba(255, 255, 255, .045);
+}
+.profile-details dt {
+  color: var(--muted);
+  font-size: 13px;
+}
+.profile-details dd {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.profile-details dt:first-of-type,
+.profile-details dt:first-of-type + dd { border-top: 0; }
+
+.password-form {
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 1px solid rgba(255, 255, 255, .055);
+}
+.password-form h3 { margin: 0; font-size: 18px; font-weight: 680; }
+.password-form > p {
+  margin: 7px 0 17px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.password-form label,
+.endpoint-form label,
+.pairing-form label {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.password-form input,
+.endpoint-row input,
+.pairing-form > input,
+.pairing-row input {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  margin-bottom: 13px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--utility-control-radius);
+  outline: none;
+  background: var(--utility-input);
+  color: #fff;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .025);
+  -webkit-backdrop-filter: blur(10px) saturate(1.03);
+  backdrop-filter: blur(10px) saturate(1.03);
+}
+.password-form input:focus,
+.endpoint-row input:focus,
+.pairing-form > input:focus,
+.pairing-row input:focus {
+  background: rgba(244, 248, 241, .105);
+  box-shadow: 0 0 0 2px rgba(127, 178, 73, .30);
+}
+.account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 4px;
+}
+.profile-page .action-button.danger {
+  background: rgba(137, 42, 35, .20);
+  color: #ffd8d4;
+}
+.profile-page .action-button.danger:hover:not(:disabled) {
+  background: rgba(164, 49, 40, .34);
+}
+
+.connection-settings h2,
+.pairing-settings h2 { margin: 0; font-size: 20px; font-weight: 680; }
+.connection-settings > p,
+.pairing-settings > p {
+  margin: 8px 0 18px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.endpoint-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
+  gap: 9px;
+}
+.endpoint-row input { margin-bottom: 0; }
+.endpoint-message {
+  min-height: 20px;
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.endpoint-message.error { color: #ffbcbc; }
+.pairing-form { display: grid; gap: 7px; }
+.pairing-form > input { margin-bottom: 0; }
+.pairing-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 9px;
+}
+.pairing-row input { margin-bottom: 0; }
+.pairing-row + .endpoint-message { margin-top: 2px; }
+
+@media (max-width: 760px) {
+  .endpoint-row,
+  .pairing-row { grid-template-columns: 1fr; }
+  .endpoint-row .action-button,
+  .account-actions .action-button { width: 100%; }
+}
+@media (max-width: 540px) {
+  .profile-account-card { padding: 18px; }
+  .profile-identity { align-items: flex-start; gap: 14px; }
+  .profile-avatar-large { width: 60px; height: 60px; flex-basis: 60px; font-size: 24px; }
+  .profile-identity-heading { align-items: flex-start; flex-direction: column; gap: 6px; }
+  .profile-identity-heading h2 { max-width: 100%; font-size: 23px; }
+  .profile-details { grid-template-columns: 1fr; }
+  .profile-details dt { padding: 12px 0 2px; }
+  .profile-details dd { padding: 0 0 12px; border-top: 0; }
+  .profile-page .section-heading { align-items: flex-start; flex-direction: column; }
+  .profile-header { gap: 14px; }
+}

@@ -12,7 +12,7 @@
 .episode-title { display: block; margin-top: 4px; overflow: hidden; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
 .episode-progress { min-width: 78px; color: #bdbdbd; font-size: 12px; text-align: right; }
 .episode-progress-track { height: 3px; margin-top: 7px; overflow: hidden; border-radius: 99px; background: rgba(255,255,255,.13); }
-.episode-progress-bar { height: 100%; background: #7ba641; }
+.episode-progress-bar { height: 100%; background: #8cbd50; }
 
 /* Il player Serie usa esattamente il player Film. Questi sono gli unici controlli extra.
    La navigazione episodio vive dentro i controlli, subito sotto la timeline. */
