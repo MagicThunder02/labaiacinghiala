@@ -1,0 +1,102 @@
+id: it.baia.cinghiala
+runtime: org.gnome.Platform
+# "49": la versione del runtime determina anche il ramo del SDK sottostante e
+# quindi la versione di rustc fornita da org.freedesktop.Sdk.Extension.rust-stable.
+# GNOME 46 fallisce la build con "feature `edition2024` is required" — il suo
+# ramo SDK porta rustc ~1.81, e Cargo.lock (formato v4 + dipendenze edition
+# 2024) richiede circa rustc >= 1.85. 49 risolve il problema (rustc abbastanza
+# recente). Se in futuro anche questo si rivelasse insufficiente, elenca le
+# versioni realmente disponibili invece di indovinare:
+#   flatpak install flathub org.gnome.Sdk    # senza specificare versione:
+#                                             # elenca interattivamente i rami disponibili
+runtime-version: "49"
+sdk: org.gnome.Sdk
+command: baia-cinghiala
+
+# Compila dentro la sandbox invece di riusare un .deb esterno: il binario resta
+# linkato contro la glibc del runtime stesso, non contro quella della macchina
+# di build. Necessario dopo aver incontrato "GLIBC_2.39 not found" impacchettando
+# un .deb compilato su Fedora 43 (glibc più recente del runtime GNOME 46) — vedi
+# https://github.com/tauri-apps/tauri/issues/11210. Segue lo schema ufficiale
+# Tauri: https://v2.tauri.app/distribute/flatpak/
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.node20
+  - org.freedesktop.Sdk.Extension.rust-stable
+
+finish-args:
+  # Finestra webview (WebKitGTK, incluso in org.gnome.Platform)
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --share=ipc
+  # Il client parla HTTPS con il Baia Host Connector (LAN o Internet diretto su 443)
+  - --share=network
+  # Identità del dispositivo (chiave Ed25519) via Secret Service (gnome-keyring/kwallet),
+  # stesso meccanismo di src-tauri/src/identity.rs — nessun --filesystem necessario per
+  # questo. Il file picker (tauri-plugin-dialog/rfd) e' già portal-aware in sandbox: non
+  # serve --filesystem=host, i portali gestiscono l'accesso file scelto dall'utente.
+  - --talk-name=org.freedesktop.secrets
+
+modules:
+  - name: baia-cinghiala
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/node20/bin:/usr/lib/sdk/rust-stable/bin
+      # Rete SOLO in fase di build, per npm ci/cargo fetch da npmjs.org e
+      # crates.io — separato dal --share=network di finish-args sopra, che è il
+      # permesso di rete dell'app già installata. Questo NON è ammissibile per
+      # una submission Flathub (richiede dipendenze vendorizzate offline, es.
+      # con flatpak-node-generator/flatpak-cargo-generator); va benissimo per
+      # una build locale/distribuzione diretta come questa.
+      build-args:
+        - --share=network
+    sources:
+      # L'intero repository: npm ci + tauri build girano dentro la sandbox,
+      # generano da soli node_modules/, public/vendor/pdfjs e il binario finale.
+      # NOTA: build-flatpak.sh scrive sempre il manifest effettivo in
+      # flatpak/.generated/ (per poter sostituire __CONNECTOR_ENDPOINT_ENV_PREFIX__),
+      # cioè un livello più in profondità di questo file. "path" è relativo alla
+      # posizione del manifest realmente passato a flatpak-builder, quindi da
+      # flatpak/.generated/ servono due risalite per arrivare alla root del repo,
+      # non una — anche eseguendo questo file direttamente da flatpak/ (invece che
+      # tramite lo script) va corretto a mano in "..".
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - node_modules
+          - "**/target"
+          - data
+          - media
+          - flatpak/.generated
+          - build-dir
+          - repo
+          - "*.flatpak"
+    build-commands:
+      - npm ci
+      # __CONNECTOR_ENDPOINT_ENV_PREFIX__ viene sostituito da build-flatpak.sh
+      # solo se sono stati passati --connector-endpoint/--server-fingerprint;
+      # altrimenti resta vuoto (build generica, configurata al pairing).
+      - __CONNECTOR_ENDPOINT_ENV_PREFIX__npm run tauri build -- --bundles deb
+      - >-
+        deb_path="$(find src-tauri/target/release/bundle/deb -maxdepth 1 -name '*.deb' | head -n1)";
+        [ -n "$deb_path" ] || { echo "Nessun .deb prodotto da tauri build"; exit 1; };
+        ar -x "$deb_path"
+      - tar -xf data.tar.* --no-same-owner
+      # Il nome binario e' fisso (dal Cargo package name in src-tauri/Cargo.toml),
+      # ma Tauri NON normalizza productName ("Baia Cinghiala", con spazio e
+      # maiuscole) per il file .desktop o per i nomi delle icone — usiamo find
+      # invece di indovinare i nomi esatti, così il manifest resta valido anche
+      # se cambiano productName/version.
+      - install -Dm755 usr/bin/baia-cinghiala /app/bin/baia-cinghiala
+      - >-
+        desktop_src="$(find usr/share/applications -maxdepth 1 -name '*.desktop' | head -n1)";
+        [ -n "$desktop_src" ] || { echo 'Nessun file .desktop trovato in usr/share/applications/'; exit 1; };
+        install -Dm644 "$desktop_src" /app/share/applications/it.baia.cinghiala.desktop
+      - >-
+        for size in 32 128 256; do
+          src="$(find "usr/share/icons/hicolor/${size}x${size}/apps" -maxdepth 1 -name '*.png' 2>/dev/null | head -n1)";
+          if [ -n "$src" ]; then
+            install -Dm644 "$src" "/app/share/icons/hicolor/${size}x${size}/apps/it.baia.cinghiala.png";
+          fi;
+        done
