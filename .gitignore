@@ -16,3 +16,9 @@ target/
 .baia-fase0-logs/
 Baia-Direct-Host-Test-*/
 Baia-Direct-Host-Test-*.zip
+
+#Aggiunte flatpak
+flatpak/.generated/
+build-dir/
+repo/
+*.flatpak

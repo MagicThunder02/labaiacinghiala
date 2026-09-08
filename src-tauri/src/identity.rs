@@ -201,7 +201,48 @@ fn load_or_create_signing_key() -> Result<(SigningKey, &'static str), String> {
     Ok((stored, "Android app-private storage (4B test build)"))
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "android")))]
+#[cfg(target_os = "linux")]
+fn load_or_create_signing_key() -> Result<(SigningKey, &'static str), String> {
+    use keyring::{Entry, Error};
+
+    // Secret Service (gnome-keyring/kwallet via the D-Bus org.freedesktop.secrets API).
+    // Mirrors the Windows Credential Manager branch above exactly; the keyring crate's v1
+    // API is identical across platforms once the right backend feature is selected in
+    // Cargo.toml. Requires a running Secret Service provider (present by default in
+    // GNOME/KDE desktop sessions; on a minimal/headless Debian box you may need
+    // `gnome-keyring` installed and a D-Bus session/keyring unlocked at login).
+    let entry = Entry::new(DEVICE_IDENTITY_SERVICE, DEVICE_IDENTITY_ACCOUNT)
+        .map_err(|error| format!("Impossibile aprire il Secret Service di sistema: {error}"))?;
+
+    match entry.get_secret() {
+        Ok(secret) => {
+            let secret = Zeroizing::new(secret);
+            signing_key_from_secret(&secret[..]).map(|key| (key, "Linux Secret Service"))
+        }
+        Err(Error::NoEntry) => {
+            let mut secret = Zeroizing::new([0u8; ED25519_SECRET_LENGTH]);
+            getrandom::fill(&mut secret[..])
+                .map_err(|error| format!("Impossibile generare la chiave crittografica del dispositivo: {error}"))?;
+
+            entry
+                .set_secret(&secret[..])
+                .map_err(|error| format!("Impossibile salvare la chiave privata nel Secret Service: {error}"))?;
+
+            // Rileggiamo il segreto appena scritto per verificare subito la persistenza.
+            let stored = Zeroizing::new(
+                entry
+                    .get_secret()
+                    .map_err(|error| format!("Impossibile rileggere la chiave privata appena salvata: {error}"))?,
+            );
+            signing_key_from_secret(&stored[..]).map(|key| (key, "Linux Secret Service"))
+        }
+        Err(error) => Err(format!(
+            "Impossibile leggere la chiave privata dal Secret Service di sistema: {error}"
+        )),
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "android", target_os = "linux")))]
 fn load_or_create_signing_key() -> Result<(SigningKey, &'static str), String> {
     Err(format!(
         "Custodia sicura dell'identità non ancora implementata per {}.",

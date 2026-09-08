@@ -27,7 +27,17 @@ const MAX_HEADER_LINE_BYTES: usize = 8192;
 const MAX_HEADER_COUNT: usize = 64;
 const BRIDGE_HEADER: &str = "X-Baia-Media-Bridge";
 const BRIDGE_HEADER_VALUE: &str = "media-v1";
+// Tauri's webview origin differs by platform: Windows and Android serve the
+// frontend from http://tauri.localhost, while Linux (and macOS/iOS) use the
+// tauri://localhost custom scheme directly. This must match whatever Origin
+// header the webview's fetch() actually sends, or the browser rejects the
+// response due to a CORS mismatch even though the HTTP request itself
+// succeeds (visible as "Origin ... is not allowed by Access-Control-Allow-Origin"
+// in the console, despite a 200 status).
+#[cfg(any(target_os = "windows", target_os = "android"))]
 const BRIDGE_CORS_ORIGIN: &str = "http://tauri.localhost";
+#[cfg(not(any(target_os = "windows", target_os = "android")))]
+const BRIDGE_CORS_ORIGIN: &str = "tauri://localhost";
 const BRIDGE_EXPOSE_HEADERS: &str = "Accept-Ranges, Content-Length, Content-Range, Content-Type, ETag, Last-Modified";
 
 #[derive(Clone)]
