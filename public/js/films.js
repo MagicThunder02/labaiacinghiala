@@ -430,8 +430,8 @@ function movieMeta(movie, { includeDirector = true } = {}) {
 
 function movieDetailMeta(movie) {
   const lines = [];
-  if (Array.isArray(movie.genres) && movie.genres.length) lines.push(movie.genres.join(', '));
   if (movie.year) lines.push(String(movie.year));
+  if (Array.isArray(movie.genres) && movie.genres.length) lines.push(movie.genres.join(', '));
   if (movie.director) lines.push(`Regia: ${movie.director}`);
   return lines.join('\n') || 'Informazioni non disponibili';
 }
@@ -596,6 +596,9 @@ function closeFiltersPanel() {
 function toggleFiltersPanel() {
   const shouldOpen = elements.filtersPanel.hidden;
   closeMenus();
+  if (shouldOpen && window.parent !== window) {
+    window.parent.postMessage({ type: 'shell-close-drawer' }, window.location.origin);
+  }
   elements.filtersPanel.hidden = !shouldOpen;
   elements.filtersButton.setAttribute('aria-expanded', String(shouldOpen));
   elements.filtersButton.classList.toggle('active', shouldOpen);
@@ -765,7 +768,16 @@ async function showHome() {
   await Promise.all([loadHome(), loadFilters()]);
 }
 
+function captureSearchViewportAnchor() {
+  const rect = elements.searchField.getBoundingClientRect();
+  document.documentElement.style.setProperty('--film-search-anchor-left', `${rect.left}px`);
+  document.documentElement.style.setProperty('--film-search-anchor-top', `${rect.top}px`);
+  document.documentElement.style.setProperty('--film-search-anchor-width', `${rect.width}px`);
+  document.documentElement.style.setProperty('--film-search-anchor-height', `${rect.height}px`);
+}
+
 async function showSearch() {
+  captureSearchViewportAnchor();
   setBrowseMode('search');
   await loadSearch();
   requestAnimationFrame(() => elements.searchInput.focus({ preventScroll: true }));
@@ -935,9 +947,12 @@ function openDetails(movie, { preserveReturnPosition = false } = {}) {
   elements.playerView.hidden = true;
   elements.detailView.hidden = false;
   document.body.classList.add('film-overlay-open');
+  window.BaiaPage.shellContextBack?.(true);
   elements.detailView.scrollTop = 0;
   loadSimilarMovies(movie.id);
-  requestAnimationFrame(() => elements.detailBackButton.focus({ preventScroll: true }));
+  if (window.parent === window) {
+    requestAnimationFrame(() => elements.detailBackButton.focus({ preventScroll: true }));
+  }
 }
 
 async function refreshCurrentView() {
@@ -952,6 +967,7 @@ async function returnToBrowse() {
   elements.playerView.hidden = true;
   elements.browseView.hidden = false;
   document.body.classList.remove('film-overlay-open');
+  window.BaiaPage.shellContextBack?.(false);
   state.paletteRequest += 1;
   state.similarRequest += 1;
   state.similarMovies = [];
@@ -1051,6 +1067,7 @@ async function startPlayback({ restart = false } = {}) {
   elements.playerMeta.textContent = movieMeta(movie);
   elements.detailView.hidden = true;
   elements.playerView.hidden = false;
+  window.BaiaPage.shellContextBack?.(true);
   setPlayerLoading(true);
   elements.playerSeek.value = '0';
   elements.playerSeek.max = '0';
@@ -1469,7 +1486,17 @@ syncFilmViewport();
 
 window.addEventListener('message', (event) => {
   if (event.origin !== window.location.origin) return;
+  if (event.data?.type === 'shell-close-transient-panels') {
+    closeFiltersPanel();
+    return;
+  }
+  if (event.data?.type === 'shell-context-back-request') {
+    if (!elements.playerView.hidden) closePlayer().catch(handleError);
+    else if (!elements.detailView.hidden) returnToBrowse().catch(handleError);
+    return;
+  }
   if (event.data?.type === 'shell-page-visibility') {
+    if (event.data.active === true) window.BaiaPage.shellContextBack?.(!elements.detailView.hidden || !elements.playerView.hidden);
     if (event.data.active === false && !elements.playerView.hidden) saveProgress(true);
     if (event.data.active === true && !elements.playerView.hidden) {
       state.progressLastObservedSeconds = Number.isFinite(elements.videoPlayer.currentTime)

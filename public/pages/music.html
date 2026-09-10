@@ -43,18 +43,20 @@
       </section>
 
       <section id="homeView" class="home-view music-home-view">
-        <section class="music-shortcuts" aria-label="Sezioni principali Musica">
-          <button class="music-shortcut" type="button" data-music-section="playlists">
-            <span class="music-shortcut-icon music-icon-playlists" aria-hidden="true"></span>
-            <strong>Playlist</strong>
-          </button>
-          <button class="music-shortcut" type="button" data-music-section="favorites">
-            <span class="music-shortcut-icon music-icon-favorites" aria-hidden="true"></span>
-            <strong>Preferiti</strong>
-          </button>
-        </section>
+        <div class="music-home-fixed">
+          <section class="music-shortcuts" aria-label="Sezioni principali Musica">
+            <button class="music-shortcut" type="button" data-music-section="playlists">
+              <span class="music-shortcut-icon music-icon-playlists" aria-hidden="true"></span>
+              <strong>Playlist</strong>
+            </button>
+            <button class="music-shortcut" type="button" data-music-section="favorites">
+              <span class="music-shortcut-icon music-icon-favorites" aria-hidden="true"></span>
+              <strong>Preferiti</strong>
+            </button>
+          </section>
 
-        <p id="librarySummary" class="music-library-summary" aria-live="polite"></p>
+          <p id="librarySummary" class="music-library-summary" aria-live="polite"></p>
+        </div>
 
         <section class="showcase-section music-showcase">
           <div class="section-heading"><h2>Riprodotti di recente</h2></div>

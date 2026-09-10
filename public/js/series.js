@@ -555,6 +555,9 @@ function closeFiltersPanel() {
 function toggleFiltersPanel() {
   const shouldOpen = elements.filtersPanel.hidden;
   closeMenus();
+  if (shouldOpen && window.parent !== window) {
+    window.parent.postMessage({ type: 'shell-close-drawer' }, window.location.origin);
+  }
   elements.filtersPanel.hidden = !shouldOpen;
   elements.filtersButton.setAttribute('aria-expanded', String(shouldOpen));
   elements.filtersButton.classList.toggle('active', shouldOpen);
@@ -704,7 +707,16 @@ async function showHome() {
   await Promise.all([loadHome(), loadFilters()]);
 }
 
+function captureSearchViewportAnchor() {
+  const rect = elements.searchField.getBoundingClientRect();
+  document.documentElement.style.setProperty('--film-search-anchor-left', `${rect.left}px`);
+  document.documentElement.style.setProperty('--film-search-anchor-top', `${rect.top}px`);
+  document.documentElement.style.setProperty('--film-search-anchor-width', `${rect.width}px`);
+  document.documentElement.style.setProperty('--film-search-anchor-height', `${rect.height}px`);
+}
+
 async function showSearch() {
+  captureSearchViewportAnchor();
   setBrowseMode('search');
   await loadSearch();
   requestAnimationFrame(() => elements.searchInput.focus({ preventScroll: true }));
@@ -844,8 +856,21 @@ async function openDetails(seriesUuid) {
   elements.browse.hidden = true;
   elements.detail.hidden = false;
   elements.playerView.hidden = true;
+  window.BaiaPage.shellContextBack?.(true);
   elements.detail.scrollTop = 0;
   void loadSimilarSeries(state.activeSeries.seriesUuid);
+}
+
+function closeDetails() {
+  state.paletteRequest += 1;
+  state.similarRequest += 1;
+  state.similarSeries = [];
+  elements.similarSection.hidden = true;
+  elements.similarRail.replaceChildren();
+  state.activeSeries = null;
+  elements.detail.hidden = true;
+  elements.browse.hidden = false;
+  window.BaiaPage.shellContextBack?.(false);
 }
 
 function allEpisodes() {
@@ -952,6 +977,7 @@ async function startPlayback(episode, { restart = false } = {}) {
   elements.detail.hidden = true;
   elements.browse.hidden = true;
   elements.playerView.hidden = false;
+  window.BaiaPage.shellContextBack?.(true);
   updateEpisodeNav();
   setPlayerLoading(true);
   elements.playerSeek.value = '0';
@@ -1196,16 +1222,7 @@ document.querySelectorAll('[data-scroll-target]').forEach((button) => {
   });
 });
 document.addEventListener('click', closeFiltersPanel);
-elements.detailBack.addEventListener('click', () => {
-  state.paletteRequest += 1;
-  state.similarRequest += 1;
-  state.similarSeries = [];
-  elements.similarSection.hidden = true;
-  elements.similarRail.replaceChildren();
-  state.activeSeries = null;
-  elements.detail.hidden = true;
-  elements.browse.hidden = false;
-});
+elements.detailBack.addEventListener('click', closeDetails);
 elements.season.addEventListener('change', renderEpisodes);
 elements.resume.addEventListener('click', () => startPlayback(episodeById(state.activeSeries?.resumeEpisodeId) || firstEpisode(), { restart: false }).catch(handleError));
 elements.restart.addEventListener('click', () => startPlayback(firstEpisode(), { restart: true }).catch(handleError));
@@ -1343,21 +1360,24 @@ document.addEventListener('keydown', (event) => {
 
   if (event.key === 'Escape' && !elements.detail.hidden) {
     event.preventDefault();
-    state.paletteRequest += 1;
-    state.similarRequest += 1;
-    state.similarSeries = [];
-    elements.similarSection.hidden = true;
-    elements.similarRail.replaceChildren();
-    state.activeSeries = null;
-    elements.detail.hidden = true;
-    elements.browse.hidden = false;
+    closeDetails();
   }
 });
 
 window.addEventListener('pagehide', saveProgressOnPageExit);
 window.addEventListener('message', (event) => {
   if (event.origin !== window.location.origin) return;
+  if (event.data?.type === 'shell-close-transient-panels') {
+    closeFiltersPanel();
+    return;
+  }
+  if (event.data?.type === 'shell-context-back-request') {
+    if (!elements.playerView.hidden) closePlayer().catch(handleError);
+    else if (!elements.detail.hidden) closeDetails();
+    return;
+  }
   if (event.data?.type === 'shell-page-visibility') {
+    if (event.data.active === true) window.BaiaPage.shellContextBack?.(!elements.detail.hidden || !elements.playerView.hidden);
     if (event.data.active === false && !elements.playerView.hidden) saveProgress(true);
     if (event.data.active === true && !elements.playerView.hidden) {
       state.progressLastObservedSeconds = Number.isFinite(elements.videoPlayer.currentTime)

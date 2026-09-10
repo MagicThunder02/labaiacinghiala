@@ -1,7 +1,7 @@
 :root {
-  --music-accent: #6d913b;
-  --music-accent-dark: #3c511f;
-  --music-card-a: #526d38;
+  --music-accent: #7fb249;
+  --music-accent-dark: #526f2a;
+  --music-card-a: #658747;
   --music-card-b: #242c20;
 }
 
@@ -36,7 +36,7 @@ body.music-search-open { overflow: hidden; }
 .music-shortcut:focus-visible {
   transform: translateY(-2px);
   border-color: rgba(255,255,255,.35);
-  background: linear-gradient(135deg, rgba(109,145,59,.32), rgba(255,255,255,.05));
+  background: linear-gradient(135deg, rgba(127,178,73,.32), rgba(255,255,255,.05));
   outline: none;
 }
 .music-shortcut strong {
@@ -166,7 +166,7 @@ body.music-search-open { overflow: hidden; }
 .music-card:hover .music-card-queue-button,
 .music-card-queue-button:focus-visible { opacity: 1; transform: none; }
 .music-card-queue-button:hover,
-.music-card-queue-button:focus-visible { background: rgba(54,70,38,.94); outline: none; }
+.music-card-queue-button:focus-visible { background: rgba(70,94,42,.94); outline: none; }
 .music-card-queue-button::before {
   content: '';
   width: 17px;
@@ -255,7 +255,7 @@ body.music-search-open { overflow: hidden; }
 .music-favorite-action.partial {
   color: #e5f3c4;
   border-color: rgba(213,235,169,.48);
-  background: rgba(126,157,76,.2);
+  background: rgba(142,188,85,.2);
 }
 .music-favorite-button.active::before,
 .music-favorite-action.active .music-favorite-action-icon {
@@ -296,7 +296,7 @@ body.music-search-open { overflow: hidden; }
   padding: 16px;
   border: 1px solid rgba(255,255,255,.1);
   border-radius: 9px;
-  background: linear-gradient(145deg, rgba(109,145,59,.28), rgba(255,255,255,.035));
+  background: linear-gradient(145deg, rgba(127,178,73,.28), rgba(255,255,255,.035));
   color: #fff;
   font-weight: 700;
   text-align: left;
@@ -503,7 +503,7 @@ body.music-search-open { overflow: hidden; }
   outline: none;
 }
 .music-track-row.is-current {
-  background: rgba(109,145,59,.14);
+  background: rgba(127,178,73,.14);
 }
 .music-track-row.is-current .music-track-title { color: #d7edb9; }
 
@@ -559,7 +559,7 @@ body.music-search-open { overflow: hidden; }
 .music-playlist-cover {
   background:
     linear-gradient(135deg, rgba(255,255,255,.11) 0 25%, transparent 25% 50%, rgba(255,255,255,.06) 50% 75%, transparent 75%),
-    linear-gradient(145deg, #536b35, #20281c 72%);
+    linear-gradient(145deg, #668641, #20281c 72%);
   background-size: 34px 34px, auto;
 }
 .music-playlist-cover::before {
@@ -1004,7 +1004,7 @@ body.music-search-open { overflow: hidden; }
 .music-search-collage-tile {
   min-width: 0;
   min-height: 0;
-  background: linear-gradient(145deg, #526d38, #242c20 72%);
+  background: linear-gradient(145deg, #658747, #242c20 72%);
   background-position: center;
   background-repeat: no-repeat;
   background-size: cover;
@@ -1144,4 +1144,306 @@ body.music-search-open { overflow: hidden; }
   .music-search-track-main { grid-template-columns: 46px minmax(0, 1fr); gap: 9px; }
   .music-search-track-main .music-search-cover { width: 46px; height: 46px; }
   .music-search-track-controls .music-favorite-button { display: none; }
+}
+
+
+/* Barra superiore 2026: ricerca centrale, navigazione musicale a destra. */
+.music-header {
+  display: grid;
+  grid-template-columns: minmax(230px, .72fr) minmax(360px, 760px) minmax(320px, .95fr);
+  align-items: center;
+  min-height: 86px;
+  gap: clamp(18px, 2.2vw, 34px);
+  padding: 0;
+}
+.music-header .films-title {
+  align-self: center;
+  visibility: hidden;
+  pointer-events: none;
+}
+.music-global-search {
+  width: 100%;
+  align-self: center;
+}
+.music-header .films-navigation {
+  align-self: center;
+  justify-self: end;
+  justify-content: flex-end;
+  min-width: 0;
+  margin-right: 56px;
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 761px) and (max-height: 900px) {
+  .music-header { min-height: 72px; }
+}
+
+@media (max-width: 980px) {
+  .music-header {
+    grid-template-columns: minmax(160px, .55fr) minmax(280px, 1fr) minmax(0, auto);
+    gap: 12px;
+  }
+  .music-header .films-navigation { gap: 2px; }
+  .music-header .films-navigation .nav-button { padding-inline: 10px; }
+}
+
+@media (max-width: 760px) {
+  .music-header {
+    display: grid;
+    grid-template-columns: minmax(150px, 1fr) auto;
+    grid-template-areas:
+      "title nav"
+      "search search";
+    min-height: auto;
+    gap: 10px 12px;
+    padding: max(10px, env(safe-area-inset-top, 0px)) 0 14px;
+  }
+  .music-header .films-title { grid-area: title; }
+  .music-global-search { grid-area: search; }
+  .music-header .films-navigation {
+    grid-area: nav;
+    width: min(58vw, 410px);
+    justify-self: end;
+    justify-content: flex-start;
+    margin-right: 48px;
+  }
+}
+
+
+/* ============================================================
+   MUSICA — ricerca nella topbar, navigazione centrata subito sotto
+   ============================================================ */
+@media (min-width: 761px) {
+  .music-header {
+    grid-template-columns: minmax(230px, .72fr) minmax(360px, 760px) minmax(230px, .72fr);
+    grid-template-rows: 86px 62px;
+    grid-template-areas:
+      "title search balance"
+      "nav nav nav";
+    min-height: 148px;
+    gap: 0 clamp(18px, 2.2vw, 34px);
+    padding: 0;
+  }
+
+  .music-header .films-title {
+    grid-area: title;
+  }
+
+  .music-global-search {
+    grid-area: search;
+    align-self: center;
+  }
+
+  .music-header .films-navigation {
+    grid-area: nav;
+    align-self: start;
+    justify-self: center;
+    justify-content: center;
+    width: auto;
+    margin: 16px 0 0;
+  }
+
+  /* Il vetro chiaro appartiene solo alla vera barra superiore. */
+  .music-header::before {
+    top: 0;
+    bottom: auto;
+    height: 86px;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 761px) and (max-height: 900px) {
+  .music-header {
+    grid-template-rows: 72px 58px;
+    min-height: 130px;
+  }
+  .music-header::before { height: 72px; }
+}
+
+@media (max-width: 760px) {
+  .music-header {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "search"
+      "nav";
+    grid-template-rows: 68px auto;
+    min-height: auto;
+    gap: 14px;
+    padding: 0 0 14px;
+  }
+  .music-header .films-title {
+    position: absolute;
+    visibility: hidden;
+  }
+  .music-global-search {
+    grid-area: search;
+    align-self: center;
+    width: min(64vw, 520px);
+    margin-inline: auto;
+  }
+  .music-header .films-navigation {
+    grid-area: nav;
+    width: 100%;
+    margin: 0;
+    justify-self: stretch;
+    justify-content: center;
+  }
+  .music-header::before {
+    top: 0;
+    bottom: auto;
+    height: 68px;
+  }
+}
+
+/* ============================================================
+   RIFINITURA UI — ricerca Musica più compatta e glass distinta
+   ============================================================ */
+.music-global-search {
+  width: min(680px, 100%);
+  border-color: rgba(255, 255, 255, .115);
+  background: rgba(255, 255, 255, .072);
+  -webkit-backdrop-filter: blur(12px) saturate(.94) brightness(.90);
+  backdrop-filter: blur(12px) saturate(.94) brightness(.90);
+}
+.music-global-search:focus-within {
+  border-color: rgba(255, 255, 255, .24);
+  background: rgba(255, 255, 255, .105);
+  -webkit-backdrop-filter: blur(12px) saturate(.94) brightness(.90);
+  backdrop-filter: blur(12px) saturate(.94) brightness(.90);
+}
+
+@media (min-width: 761px) {
+  .music-header {
+    grid-template-columns: minmax(220px, .72fr) minmax(340px, 680px) minmax(220px, .72fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .music-global-search { width: min(62vw, 480px); }
+}
+
+
+/* ============================================================
+   RIFINITURA MUSICA — ricerca rail-glass + controlli Home sticky
+   ============================================================ */
+.music-global-search,
+.music-global-search:focus-within {
+  border-color: rgba(255, 255, 255, .18);
+  background: rgba(234, 239, 231, .13);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  backdrop-filter: blur(18px) saturate(1.08);
+}
+.music-global-search:focus-within {
+  border-color: rgba(255, 255, 255, .30);
+  background: rgba(244, 248, 241, .22);
+}
+
+@media (min-width: 761px) {
+  .music-home-fixed {
+    position: sticky;
+    z-index: 24;
+    top: 148px;
+    margin: 4px 0 28px;
+    padding: 4px 0 10px;
+    background: var(--page-bg);
+  }
+  .music-home-fixed .music-shortcuts {
+    margin: 0 0 16px;
+  }
+  .music-home-fixed .music-library-summary {
+    margin: 0;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 761px) and (max-height: 900px) {
+  .music-home-fixed { top: 130px; }
+}
+
+@media (max-width: 760px) {
+  .music-home-fixed { position: static; }
+}
+
+/* Ricerca Musica: stesso vetro approvato, senza cornice chiara. */
+.music-global-search,
+.music-global-search:focus-within {
+  border-color: transparent;
+}
+
+
+/* Dettagli Musica nella shell: il tasto Indietro vive nella topbar, come Film/Serie. */
+html.baia-shell-embedded .music-detail-view .music-detail-back {
+  display: none !important;
+}
+
+/* ============================================================
+   RIFINITURA MUSICA — sticky solo sulla testata + vetro esteso ai tab
+   Playlist/Preferiti e contatori tornano a scorrere con il contenuto.
+   Il piano glass della topbar include anche Home/Album/Artisti/Generi.
+   ============================================================ */
+.music-home-fixed {
+  position: static;
+  z-index: auto;
+  top: auto;
+  margin: 4px 0 28px;
+  padding: 0;
+  background: transparent;
+}
+.music-home-fixed .music-shortcuts {
+  margin: 0 0 16px;
+}
+.music-home-fixed .music-library-summary {
+  margin: 0;
+}
+
+/* La testata resta sticky tramite .films-header; il vetro ora copre entrambe
+   le righe, così i tab musicali sembrano parte della topbar estesa. */
+.music-header::before {
+  top: 0;
+  bottom: 0;
+  height: auto;
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 761px) and (max-height: 900px) {
+  .music-home-fixed { top: auto; }
+}
+
+@media (max-width: 760px) {
+  .music-home-fixed {
+    position: static;
+    margin: 4px 0 24px;
+    padding: 0;
+  }
+  .music-header::before {
+    top: 0;
+    bottom: 0;
+    height: auto;
+  }
+}
+
+/* ============================================================
+   RIFINITURA MUSICA — spaziatura verticale simmetrica della topbar estesa
+   La distanza sopra la ricerca, tra ricerca e tab, e sotto i tab è uniforme.
+   ============================================================ */
+@media (min-width: 761px) {
+  .music-header {
+    grid-template-rows: 86px 57px;
+    min-height: 143px;
+  }
+
+  .music-header .films-navigation {
+    margin-top: 0;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 761px) and (max-height: 900px) {
+  .music-header {
+    grid-template-rows: 72px 47px;
+    min-height: 119px;
+  }
+}
+
+@media (max-width: 760px) {
+  .music-header {
+    gap: 0;
+    padding-bottom: 10px;
+  }
 }

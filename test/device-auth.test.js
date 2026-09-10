@@ -91,6 +91,29 @@ test('autentica una richiesta firmata e impedisce il replay del nonce', () => {
   db.close();
 });
 
+test('DELETE fa parte del contratto firmato ma PATCH resta rifiutato', () => {
+  const deviceId = crypto.randomUUID();
+  const nonce = crypto.randomBytes(16).toString('base64url');
+  const message = requestProofMessage({
+    deviceId,
+    timestamp: 1_700_000_000,
+    nonce,
+    method: 'delete',
+    target: '/api/metadata/items/movie%3A42',
+  }).toString('utf8');
+  assert.match(message, /\nDELETE\n\/api\/metadata\/items\/movie%3A42$/);
+  assert.throws(
+    () => requestProofMessage({
+      deviceId,
+      timestamp: 1_700_000_000,
+      nonce,
+      method: 'PATCH',
+      target: '/api/metadata/items/movie%3A42',
+    }),
+    (error) => error instanceof DeviceAuthError && error.code === 'AUTH_INVALID',
+  );
+});
+
 test('firma metodo e query: una richiesta modificata viene rifiutata', () => {
   const { db, privateKey, device } = fixture();
   const nowSeconds = 1_700_000_000;

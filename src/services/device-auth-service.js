@@ -37,7 +37,7 @@ function decodeBase64Url(value, expectedBytes, fieldName) {
 
 function normalizeMethod(value) {
   const method = String(value || '').trim().toUpperCase();
-  if (!['GET', 'HEAD', 'POST', 'PUT'].includes(method)) {
+  if (!['GET', 'HEAD', 'POST', 'PUT', 'DELETE'].includes(method)) {
     throw new DeviceAuthError('AUTH_INVALID', 'Metodo richiesta non autorizzabile.');
   }
   return method;

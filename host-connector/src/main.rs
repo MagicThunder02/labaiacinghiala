@@ -1606,6 +1606,7 @@ fn normalize_method(value: &str) -> Result<String, String> {
         "HEAD" => Ok("HEAD".to_string()),
         "POST" => Ok("POST".to_string()),
         "PUT" => Ok("PUT".to_string()),
+        "DELETE" => Ok("DELETE".to_string()),
         _ => Err("Metodo applicativo non consentito dal protocollo v1.".to_string()),
     }
 }
@@ -1968,7 +1969,8 @@ mod tests {
         let mut headers = BTreeMap::new();
         headers.insert("X-Baia-Signature".to_string(), "forged".to_string());
         assert!(normalize_application_headers(headers).is_err());
-        assert!(normalize_method("DELETE").is_err());
+        assert_eq!(normalize_method("DELETE").unwrap(), "DELETE");
+        assert!(normalize_method("PATCH").is_err());
         assert!(normalize_body("GET", Some("payload".to_string())).is_err());
     }
 
