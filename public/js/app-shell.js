@@ -130,6 +130,11 @@ function syncBackdrop(open) {
 function setSidebarOpen(open, { returnFocus = false } = {}) {
   const shouldOpen = Boolean(open);
 
+  if (shouldOpen) {
+    const activeFrame = frames.get(currentPageId);
+    activeFrame?.contentWindow?.postMessage({ type: 'shell-close-transient-panels' }, window.location.origin);
+  }
+
   elements.sidebar.classList.toggle('is-open', shouldOpen);
   elements.sidebarTab.setAttribute('aria-expanded', String(shouldOpen));
   elements.sidebarTab.setAttribute('aria-label', shouldOpen ? 'Chiudi menu' : 'Apri menu');
@@ -1740,6 +1745,11 @@ window.addEventListener('message', (event) => {
   }
   if (data.type === 'shell-show-account-gate') {
     refreshAccountState();
+    return;
+  }
+  if (data.type === 'shell-close-drawer') {
+    const sourceFrame = frames.get(currentPageId);
+    if (!sourceFrame || event.source === sourceFrame.contentWindow) setSidebarOpen(false);
     return;
   }
   if (data.type === 'shell-navigate' && pageById.has(data.pageId)) openPage(data.pageId);
