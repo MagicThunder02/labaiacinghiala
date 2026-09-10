@@ -32,3 +32,9 @@ tokio-rustls = { version = "0.26.4", default-features = false, features = ["aws_
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "4.1.5", default-features = false, features = ["v1", "windows-native-keyring-store"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Secret Service (org.freedesktop.secrets, i.e. gnome-keyring/kwallet) via zbus - pure-Rust
+# D-Bus client, no libdbus-dev build dependency required. This is the Linux analogue of the
+# Windows Credential Manager branch above: mirrors it 1:1 in identity.rs.
+keyring = { version = "4.1.5", default-features = false, features = ["v1", "zbus-secret-service-keyring-store"] }
