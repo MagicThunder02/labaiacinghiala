@@ -128,7 +128,7 @@
 
 .file-picker.has-file {
   border-style: solid;
-  border-color: rgba(93, 128, 48, .92);
+  border-color: rgba(115, 166, 61, .92);
 }
 
 .video-picker {
@@ -252,8 +252,8 @@
 }
 
 .form-field input:focus {
-  border-color: rgba(93, 128, 48, .95);
-  box-shadow: 0 0 0 3px rgba(93, 128, 48, .17);
+  border-color: rgba(115, 166, 61, .95);
+  box-shadow: 0 0 0 3px rgba(115, 166, 61, .17);
 }
 
 .form-field small,
@@ -320,7 +320,7 @@
   margin-top: 18px;
   padding: 12px 14px;
   border-radius: 7px;
-  background: rgba(93, 128, 48, .2);
+  background: rgba(115, 166, 61, .2);
   color: #e4efd6;
   font-size: 13px;
 }
@@ -705,8 +705,8 @@
 .series-upload-item:last-child { border-bottom: 0; }
 .series-upload-item:hover { background: rgba(255,255,255,.045); }
 .series-upload-item.active {
-  background: rgba(93,128,48,.22);
-  box-shadow: inset 3px 0 0 var(--olive);
+  background: rgba(115,166,61,.22);
+  box-shadow: none;
 }
 .series-upload-item-copy { min-width: 0; }
 .series-upload-item-copy strong,
@@ -805,7 +805,7 @@
   .form-actions { margin-top: 14px; }
 }
 
-.reading-cover-preview-shell { border-radius: 0; }
+.reading-cover-preview-shell { border-radius: 10px; }
 
 /* Sessione upload Musica: lista brani e modifica dei tag incorporati. */
 .music-upload-layout {
@@ -873,8 +873,8 @@
 .music-track-item:last-child { border-bottom: 0; }
 .music-track-item:hover { background: rgba(255, 255, 255, .045); }
 .music-track-item.active {
-  background: rgba(93, 128, 48, .22);
-  box-shadow: inset 3px 0 0 var(--olive);
+  background: rgba(115, 166, 61, .22);
+  box-shadow: none;
 }
 .music-track-index {
   color: var(--muted);
@@ -905,7 +905,7 @@
   font-weight: 800;
   white-space: nowrap;
 }
-.music-track-status.ready { background: rgba(93, 128, 48, .25); color: #dceac8; }
+.music-track-status.ready { background: rgba(115, 166, 61, .25); color: #dceac8; }
 .music-track-status.invalid { background: rgba(170, 111, 39, .24); color: #ffe0a9; }
 .music-track-status.imported { background: rgba(72, 126, 160, .24); color: #d5efff; }
 
@@ -944,8 +944,8 @@
   color: #fff;
 }
 .music-tag-grid input:focus {
-  border-color: rgba(93, 128, 48, .95);
-  box-shadow: 0 0 0 3px rgba(93, 128, 48, .17);
+  border-color: rgba(115, 166, 61, .95);
+  box-shadow: 0 0 0 3px rgba(115, 166, 61, .17);
 }
 .music-tag-grid input:disabled { opacity: .6; }
 
@@ -1102,4 +1102,231 @@
 
   .library-scan-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .library-scan-intro .action-button { width: 100%; }
+}
+
+/* ============================================================
+   BAIA UTILITY UI 2026 — Upload manager
+   Superfici glass scure, gerarchia più piatta e tab sotto la topbar.
+   ============================================================ */
+.category-tabs {
+  position: sticky;
+  z-index: 24;
+  top: calc(var(--utility-header-height) + 12px);
+  gap: 4px;
+  margin: 12px auto 24px;
+  padding: 5px;
+  border: 0;
+  border-radius: 13px;
+  background: rgba(234, 239, 231, .075);
+  box-shadow: var(--utility-shadow-soft);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  backdrop-filter: blur(18px) saturate(1.08);
+}
+.category-tab {
+  min-height: 38px;
+  border-radius: 9px;
+  color: rgba(255, 255, 255, .64);
+  font-weight: 650;
+  transition: color 140ms ease, background 140ms ease;
+}
+.category-tab:hover:not(:disabled) {
+  color: #fff;
+  background: rgba(255, 255, 255, .07);
+}
+.category-tab.active,
+.category-tab.active:hover:not(:disabled) {
+  color: #f5faef;
+  background: rgba(127, 178, 73, .34);
+  box-shadow: inset 0 0 0 1px rgba(196, 229, 163, .06);
+}
+
+.upload-panel {
+  border: 0;
+  border-radius: var(--utility-radius);
+  background: var(--utility-glass);
+  box-shadow: var(--utility-shadow);
+  -webkit-backdrop-filter: blur(16px) saturate(1.04);
+  backdrop-filter: blur(16px) saturate(1.04);
+}
+.panel-heading { margin-bottom: 24px; }
+.panel-heading h2 { font-weight: 680; letter-spacing: -.012em; }
+.eyebrow { color: rgba(165, 205, 124, .86); }
+
+.file-picker {
+  border-color: rgba(255, 255, 255, .105);
+  background: rgba(234, 239, 231, .040);
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+.file-picker:hover {
+  border-color: rgba(255, 255, 255, .20);
+  background: rgba(244, 248, 241, .075);
+}
+.file-picker.has-file {
+  border-color: rgba(127, 178, 73, .55);
+  background: rgba(127, 178, 73, .055);
+}
+.picker-button {
+  border-radius: 9px;
+  background: rgba(234, 239, 231, .105);
+  box-shadow: var(--utility-shadow-soft);
+  -webkit-backdrop-filter: blur(10px) saturate(1.04);
+  backdrop-filter: blur(10px) saturate(1.04);
+}
+.poster-preview-shell {
+  border: 0;
+  outline: 0;
+  background: rgba(255, 255, 255, .045);
+}
+.poster-preview,
+.poster-fallback { border: 0; outline: 0; }
+
+.form-field input,
+.manager-select,
+.episode-assignment-row input,
+.music-tag-grid input[type="text"],
+.music-tag-grid input[type="number"] {
+  border: 0;
+  border-radius: var(--utility-control-radius);
+  background: var(--utility-input);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .025);
+  -webkit-backdrop-filter: blur(10px) saturate(1.03);
+  backdrop-filter: blur(10px) saturate(1.03);
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+.form-field input:focus,
+.manager-select:focus,
+.episode-assignment-row input:focus,
+.music-tag-grid input:focus {
+  border: 0;
+  background: rgba(244, 248, 241, .105);
+  box-shadow: 0 0 0 2px rgba(127, 178, 73, .30);
+  outline: none;
+}
+
+.destination-preview,
+.existing-series-summary,
+.series-editor-card,
+.music-session-summary,
+.music-editor-card,
+.music-advanced-tags,
+.music-file-facts,
+.library-scan-issues {
+  border: 0;
+  border-radius: 12px;
+  background: rgba(234, 239, 231, .038);
+}
+
+.upload-progress {
+  border: 0;
+  border-radius: 12px;
+  background: rgba(234, 239, 231, .045);
+}
+.progress-track { height: 5px; background: rgba(255, 255, 255, .075); }
+.progress-bar { background: var(--utility-accent); }
+.upload-message {
+  border-radius: 10px;
+  background: rgba(127, 178, 73, .14);
+  color: #e7f3da;
+}
+
+.maintenance-panel {
+  border: 0;
+  border-radius: var(--utility-radius);
+  background: var(--utility-glass);
+  box-shadow: var(--utility-shadow-soft);
+  -webkit-backdrop-filter: blur(14px) saturate(1.04);
+  backdrop-filter: blur(14px) saturate(1.04);
+}
+.maintenance-content { border-top-color: rgba(255, 255, 255, .045); }
+.stat-card,
+.library-info-item {
+  border: 0;
+  border-radius: 11px;
+  background: rgba(234, 239, 231, .048);
+}
+
+.series-upload-item-list,
+.music-track-list {
+  border: 0;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, .10);
+}
+.series-upload-item,
+.music-track-item { border-bottom-color: rgba(255, 255, 255, .035); }
+.series-upload-item.active,
+.music-track-item.active {
+  background: rgba(127, 178, 73, .16);
+  box-shadow: none;
+}
+.episode-assignment-row {
+  border: 0;
+  background: rgba(234, 239, 231, .035);
+}
+.music-track-status.ready { background: rgba(127, 178, 73, .18); }
+.music-advanced-tags { overflow: hidden; }
+.music-session-actions { border-top-color: rgba(255, 255, 255, .045); }
+
+@media (max-width: 720px) {
+  .category-tabs {
+    top: calc(var(--utility-header-height) + 8px);
+    width: calc(100% - 4px);
+    justify-content: flex-start;
+  }
+  .category-tab { min-width: 78px; }
+}
+
+/* Rifiniture interazione touch: evita il ritorno ai vecchi grigi pieni. */
+.file-picker:active {
+  border-color: rgba(255, 255, 255, .20);
+  background: rgba(244, 248, 241, .075);
+}
+
+/* ============================================================
+   RIFINITURA — anteprime copertine senza cornice
+   La cornice apparteneva al file-picker padre, non all'immagine.
+   ============================================================ */
+.poster-picker,
+.poster-picker:hover,
+.poster-picker.has-file,
+.poster-picker:focus-within {
+  border: 0;
+  border-color: transparent;
+  outline: 0;
+}
+
+.poster-preview-shell,
+.poster-preview-shell .poster-preview,
+.poster-preview-shell .poster-fallback {
+  border: 0;
+  outline: 0;
+}
+
+/* Libri / Fumetti / Manga: angoli coerenti con le altre cover. */
+.reading-cover-preview-shell,
+.reading-cover-preview-shell .poster-preview,
+.reading-cover-preview-shell .poster-fallback {
+  border-radius: 12px;
+}
+
+/* Fix definitivo anteprime copertina:
+   l'attributo hidden non deve essere annullato dal display:block di .poster-preview. */
+.poster-preview[hidden] {
+  display: none !important;
+}
+
+/* Unifica Film, Serie, Libri, Fumetti e Manga sul raggio delle cover di lettura. */
+.poster-preview-shell,
+.reading-cover-preview-shell {
+  border: 0;
+  outline: 0;
+  border-radius: 12px;
+}
+
+.poster-preview-shell .poster-preview,
+.poster-preview-shell .poster-fallback,
+.reading-cover-preview-shell .poster-preview,
+.reading-cover-preview-shell .poster-fallback {
+  border: 0;
+  outline: 0;
+  border-radius: inherit;
 }

@@ -6,35 +6,18 @@ const TOUCH_LAYOUT_QUERY = '(hover: none) and (pointer: coarse)';
 const touchLayoutMedia = window.matchMedia(TOUCH_LAYOUT_QUERY);
 
 const menuDefinition = [
-  {
-    type: 'group',
-    id: 'cinema',
-    label: 'Cinema',
-    icon: '/icons/cinema.svg',
-    pages: [
-      { id: 'films', label: 'Film', icon: '/icons/film.svg', src: '/pages/films.html', section: 'films' },
-      { id: 'series', label: 'Serie', icon: '/icons/series.svg', src: '/pages/series.html', section: 'series' },
-    ],
-  },
+  { type: 'page', id: 'films', label: 'Film', icon: '/icons/film.svg', src: '/pages/films.html', section: 'films' },
+  { type: 'page', id: 'series', label: 'Serie', icon: '/icons/series.svg', src: '/pages/series.html', section: 'series' },
   { type: 'page', id: 'music', label: 'Musica', icon: '/icons/music.svg', src: '/pages/music.html', section: 'music' },
-  {
-    type: 'group',
-    id: 'reading',
-    label: 'Libri',
-    icon: '/icons/books.svg',
-    pages: [
-      { id: 'books', label: 'Libri', icon: '/icons/books.svg', src: '/pages/books.html', section: 'books' },
-      { id: 'comics', label: 'Fumetti', icon: '/icons/comics.svg', src: '/pages/comics.html', section: 'comics' },
-      { id: 'manga', label: 'Manga', icon: '/icons/manga.svg', src: '/pages/manga.html', section: 'manga' },
-    ],
-  },
-];
-
-const quickDefinition = [
+  { type: 'page', id: 'books', label: 'Libri', icon: '/icons/books.svg', src: '/pages/books.html', section: 'books' },
+  { type: 'page', id: 'comics', label: 'Fumetti', icon: '/icons/comics.svg', src: '/pages/comics.html', section: 'comics' },
+  { type: 'page', id: 'manga', label: 'Manga', icon: '/icons/manga.svg', src: '/pages/manga.html', section: 'manga' },
   { type: 'page', id: 'upload-manager', label: 'Upload manager', icon: '/icons/upload.svg', src: '/pages/upload-manager.html', capability: 'uploadContent' },
   { type: 'page', id: 'metadata-editor', label: 'Metadati', icon: '/icons/metadata.svg', src: '/pages/metadata-editor.html', capability: 'editMetadata' },
   { type: 'page', id: 'account-manager', label: 'Account', icon: '/icons/users.svg', src: '/pages/account-manager.html', capability: 'manageAccounts' },
 ];
+
+const quickDefinition = [];
 
 const hiddenPages = [
   { id: 'profile', label: 'Profilo', src: '/pages/profile.html', allowUnauthenticated: true, allowPasswordChange: true },
@@ -46,6 +29,8 @@ if (!accountNavigation) throw new Error('Policy di navigazione account non dispo
 const elements = {
   sidebar: document.querySelector('#sidebar'),
   sidebarTab: document.querySelector('#sidebarTab'),
+  shellPageTitle: document.querySelector('#shellPageTitle'),
+  shellContextBack: document.querySelector('#shellContextBack'),
   mainMenu: document.querySelector('#mainMenu'),
   quickLinks: document.querySelector('#quickLinks'),
   contentArea: document.querySelector('#contentArea'),
@@ -121,22 +106,7 @@ function usesTouchLayout() {
 }
 
 function syncSidebarTabPlacement() {
-  if (!elements.sidebarTab || !elements.sidebar) return;
-
-  if (usesTouchLayout()) {
-    // Il pannello deve poter scorrere verticalmente: tenere il trigger al suo
-    // interno lo farebbe ritagliare dall'overflow. Come fratello resta sempre
-    // visibile e sopra l'iframe/backdrop.
-    if (elements.sidebarTab.parentElement === elements.sidebar) {
-      elements.sidebar.insertAdjacentElement('afterend', elements.sidebarTab);
-    }
-    return;
-  }
-
-  // Ripristina il DOM desktop originale, compreso il comportamento hover.
-  if (elements.sidebarTab.parentElement !== elements.sidebar) {
-    elements.sidebar.insertBefore(elements.sidebarTab, elements.sidebar.firstChild);
-  }
+  // Il trigger ora vive stabilmente nella barra superiore.
 }
 
 function syncShellViewport() {
@@ -159,18 +129,22 @@ function syncBackdrop(open) {
 
 function setSidebarOpen(open, { returnFocus = false } = {}) {
   const shouldOpen = Boolean(open);
-  const modalDrawer = shouldOpen && usesTouchLayout();
+
+  if (shouldOpen) {
+    const activeFrame = frames.get(currentPageId);
+    activeFrame?.contentWindow?.postMessage({ type: 'shell-close-transient-panels' }, window.location.origin);
+  }
 
   elements.sidebar.classList.toggle('is-open', shouldOpen);
   elements.sidebarTab.setAttribute('aria-expanded', String(shouldOpen));
   elements.sidebarTab.setAttribute('aria-label', shouldOpen ? 'Chiudi menu' : 'Apri menu');
-  document.body.classList.toggle('drawer-open', modalDrawer);
-  syncBackdrop(modalDrawer);
+  document.body.classList.toggle('drawer-open', shouldOpen);
+  syncBackdrop(shouldOpen);
 
   if (!shouldOpen) {
     const activeElement = document.activeElement;
     if (activeElement instanceof HTMLElement && elements.sidebar.contains(activeElement)) activeElement.blur();
-    if (returnFocus && usesTouchLayout()) requestAnimationFrame(() => elements.sidebarTab.focus({ preventScroll: true }));
+    if (returnFocus) requestAnimationFrame(() => elements.sidebarTab.focus({ preventScroll: true }));
   }
 }
 
@@ -1282,6 +1256,11 @@ function openPage(pageId, { allowUnauthenticated = false, silent = false } = {})
     item.classList.toggle('active', item === frame);
   });
   currentPageId = pageId;
+  if (elements.shellPageTitle) elements.shellPageTitle.textContent = page.label;
+  if (elements.shellContextBack) {
+    elements.shellContextBack.hidden = true;
+    elements.shellContextBack.setAttribute('aria-label', 'Indietro');
+  }
   applyMusicPagePolicy(pageId);
   const notifyActive = () => frame.contentWindow?.postMessage({ type: 'shell-page-visibility', active: true }, window.location.origin);
   if (frame.contentDocument?.readyState === 'complete') notifyActive();
@@ -1294,7 +1273,7 @@ function openPage(pageId, { allowUnauthenticated = false, silent = false } = {})
   elements.userMenu.hidden = true;
   elements.profileMenuButton.setAttribute('aria-expanded', 'false');
 
-  if (usesTouchLayout() || window.matchMedia('(max-width: 720px)').matches) setSidebarOpen(false);
+  if (elements.sidebar.classList.contains('is-open')) setSidebarOpen(false);
   return true;
 }
 
@@ -1684,6 +1663,14 @@ elements.musicAudio.addEventListener('error', () => {
 });
 
 elements.sidebarTab.addEventListener('click', toggleSidebar);
+
+elements.shellPageTitle?.addEventListener('click', () => {
+  openPage('films');
+});
+elements.shellContextBack?.addEventListener('click', () => {
+  const frame = frames.get(currentPageId);
+  frame?.contentWindow?.postMessage({ type: 'shell-context-back-request' }, window.location.origin);
+});
 elements.sidebarBackdrop?.addEventListener('click', (event) => {
   event.preventDefault();
   event.stopPropagation();
@@ -1760,7 +1747,23 @@ window.addEventListener('message', (event) => {
     refreshAccountState();
     return;
   }
+  if (data.type === 'shell-close-drawer') {
+    const sourceFrame = frames.get(currentPageId);
+    if (!sourceFrame || event.source === sourceFrame.contentWindow) setSidebarOpen(false);
+    return;
+  }
   if (data.type === 'shell-navigate' && pageById.has(data.pageId)) openPage(data.pageId);
+  if (data.type === 'shell-context-back' && elements.shellContextBack) {
+    const sourceFrame = frames.get(currentPageId);
+    if (!sourceFrame || event.source === sourceFrame.contentWindow) {
+      const active = Boolean(data.active);
+      const label = String(data.label || 'Indietro');
+      elements.shellContextBack.hidden = !active;
+      elements.shellContextBack.setAttribute('aria-label', label);
+      const labelNode = elements.shellContextBack.querySelector('span:last-child');
+      if (labelNode) labelNode.textContent = label;
+    }
+  }
   if (data.type === 'shell-immersive') {
     document.body.classList.toggle('immersive-page', Boolean(data.active));
     if (data.active) setSidebarOpen(false);

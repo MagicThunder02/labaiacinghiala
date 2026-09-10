@@ -1,6 +1,6 @@
 :root {
-  --reading-green: #5d8030;
-  --reading-green-dark: #3b4d1b;
+  --reading-green: #73a63d;
+  --reading-green-dark: #496825;
   --reading-paper: #f5f1e7;
 }
 
@@ -57,7 +57,7 @@
   inset: 0;
   background:
     radial-gradient(circle at 30% 22%, rgba(255,255,255,.11), transparent 25%),
-    linear-gradient(145deg, #5d8030, #3b4d1b 58%, #292929);
+    linear-gradient(145deg, #73a63d, #496825 58%, #292929);
 }
 .reading-card-title {
   margin: 9px 0 2px;
@@ -177,7 +177,7 @@
   min-width: 0;
 }
 .reader-bookmark-button { flex: 0 0 auto; background: var(--reading-green); }
-.reader-bookmark-button:hover { background: #6f963a; }
+.reader-bookmark-button:hover { background: #86bb4b; }
 .reader-bookmark-button:disabled { opacity: .55; cursor: wait; }
 
 .reader-zoom-controls {
@@ -200,7 +200,7 @@
   font-size: 22px;
   line-height: 1;
 }
-.reader-zoom-button:hover:not(:disabled) { background: rgba(93,128,48,.62); }
+.reader-zoom-button:hover:not(:disabled) { background: rgba(115,166,61,.62); }
 .reader-zoom-button:disabled { opacity: .28; cursor: default; }
 .reader-zoom-value {
   min-width: 48px;
@@ -317,7 +317,7 @@
   cursor: pointer;
   transition: background 140ms ease, opacity 140ms ease;
 }
-.reader-page-arrow:hover { background: rgba(93,128,48,.88); }
+.reader-page-arrow:hover { background: rgba(115,166,61,.88); }
 .reader-page-arrow:disabled { opacity: .18; cursor: default; }
 .reader-page-prev { left: 18px; }
 .reader-page-next { right: 18px; }
@@ -382,7 +382,7 @@
   /* Base nascosta: anche il frame precedente all'avvio dell'animazione
      non puo' mostrare la cover specchiata. */
   opacity: 0;
-  background: linear-gradient(145deg, #5d8030, #3b4d1b 58%, #292929);
+  background: linear-gradient(145deg, #73a63d, #496825 58%, #292929);
   box-shadow: none;
 }
 .closing-cover-back {
@@ -404,7 +404,7 @@
   height: 100%;
   background:
     radial-gradient(circle at 30% 22%, rgba(255,255,255,.11), transparent 25%),
-    linear-gradient(145deg, #5d8030, #3b4d1b 58%, #292929);
+    linear-gradient(145deg, #73a63d, #496825 58%, #292929);
 }
 .reading-reader.is-bookmarking .reader-topbar,
 .reading-reader.is-bookmarking .reader-page-arrow { pointer-events: none; }
