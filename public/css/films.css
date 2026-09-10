@@ -5,14 +5,14 @@
   --film-text: var(--text);
   --film-muted: var(--muted);
   --film-line: var(--line);
-  --film-accent: #688d38;
+  --film-accent: #7baf45;
   --detail-color-base: 22, 25, 19;
   --detail-color-a: 108, 139, 72;
   --detail-color-b: 55, 95, 130;
   --detail-color-c: 164, 88, 72;
   --detail-color-d: 126, 103, 176;
   --vertical-rail-card-gap: clamp(8px, .65vw, 11px);
-  --vertical-rail-title-gap: 6px;
+  --vertical-rail-title-gap: 4px;
   --vertical-rail-section-gap: 18px;
 }
 
@@ -87,7 +87,7 @@ button, input { font: inherit; }
 .nav-button:hover,
 .nav-button:focus-visible { background: rgba(255, 255, 255, .1); color: #fff; outline: none; }
 .nav-button.active { background: #efefef; color: #191919; }
-.nav-button.has-filter:not(.active) { color: #e5efd8; box-shadow: inset 0 0 0 1px rgba(104, 141, 56, .72); }
+.nav-button.has-filter:not(.active) { color: #e5efd8; box-shadow: inset 0 0 0 1px rgba(123, 175, 69, .72); }
 .icon-button { width: 42px; height: 42px; min-height: 42px; padding: 0; display: grid; place-items: center; border-radius: 50%; }
 
 .film-icon,
@@ -211,7 +211,7 @@ button, input { font: inherit; }
 
 .showcase-section + .showcase-section { margin-top: 44px; }
 .section-heading { margin-bottom: 15px; }
-.section-heading h2 { margin: 0; font-size: clamp(18px, 2vw, 24px); }
+.section-heading h2 { margin: 0; font-size: clamp(14px, 1.25vw, 18px); }
 .showcase-shell {
   --rail-arrow-width: clamp(24px, 3vw, 40px);
   --rail-arrow-gap: clamp(8px, 1vw, 16px);
@@ -404,9 +404,9 @@ button, input { font: inherit; }
 .active-filter {
   min-height: 30px;
   padding: 0 10px;
-  border: 1px solid rgba(104, 141, 56, .7);
+  border: 1px solid rgba(123, 175, 69, .7);
   border-radius: 999px;
-  background: rgba(104, 141, 56, .16);
+  background: rgba(123, 175, 69, .16);
   color: #e3ecd8;
   cursor: pointer;
 }
@@ -562,18 +562,20 @@ body.film-search-open .film-search-launcher-wrap {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  filter: blur(44px) saturate(1.42) contrast(.94);
-  opacity: .58;
-  transform: scale(1.15);
+  /* Il poster resta riconoscibile sotto il blur: meno nebbia, più colore locale. */
+  filter: blur(34px) saturate(1.58) contrast(1.02);
+  opacity: .72;
+  transform: scale(1.12);
 }
 .detail-color-wash {
+  /* Macchie più piccole e ravvicinate: la palette integra il poster senza appiattirlo. */
   background:
-    radial-gradient(circle at 12% 70%, rgba(var(--detail-color-a), .78), transparent 43%),
-    radial-gradient(circle at 86% 18%, rgba(var(--detail-color-b), .72), transparent 45%),
-    radial-gradient(circle at 76% 84%, rgba(var(--detail-color-c), .56), transparent 39%),
-    radial-gradient(circle at 38% 16%, rgba(var(--detail-color-d), .5), transparent 37%),
-    linear-gradient(135deg, rgba(var(--detail-color-base), .9), rgba(var(--detail-color-base), .4));
-  opacity: .86;
+    radial-gradient(circle at 24% 34%, rgba(var(--detail-color-a), .48), transparent 28%),
+    radial-gradient(circle at 46% 24%, rgba(var(--detail-color-b), .42), transparent 26%),
+    radial-gradient(circle at 64% 42%, rgba(var(--detail-color-c), .38), transparent 27%),
+    radial-gradient(circle at 38% 16%, rgba(var(--detail-color-d), .34), transparent 29%),
+    linear-gradient(135deg, rgba(var(--detail-color-base), .58), rgba(var(--detail-color-base), .20));
+  opacity: .68;
 }
 .detail-shade {
   background:
@@ -969,7 +971,7 @@ body.film-search-open .film-search-launcher-wrap {
   box-shadow: 0 2px 9px rgba(0, 0, 0, .72);
 }
 .player-seek:focus-visible {
-  filter: drop-shadow(0 0 5px rgba(104, 141, 56, .78));
+  filter: drop-shadow(0 0 5px rgba(123, 175, 69, .78));
 }
 .player-controls-row {
   min-height: 58px;
@@ -2385,21 +2387,24 @@ body.film-search-open .film-search-launcher-wrap {
   }
 
   .detail-backdrop-image {
-    filter: blur(64px) saturate(1.32) contrast(.98);
-    opacity: .42;
-    transform: scale(1.2);
+    /* Desktop: poster più presente, sempre zoomato e morbido ma meno "impastato". */
+    filter: blur(38px) saturate(1.55) contrast(1.02);
+    opacity: .64;
+    transform: scale(1.13);
   }
 
   .detail-color-wash {
+    /* Le quattro tonalità restano vicine fra loro e lasciano emergere la struttura del poster. */
     background:
-      radial-gradient(ellipse at 18% 52%, rgba(var(--detail-color-a), .62), transparent 44%),
-      radial-gradient(ellipse at 52% 18%, rgba(var(--detail-color-b), .36), transparent 42%),
-      radial-gradient(ellipse at 76% 72%, rgba(var(--detail-color-c), .30), transparent 44%),
+      radial-gradient(circle at 22% 34%, rgba(var(--detail-color-a), .50), transparent 29%),
+      radial-gradient(circle at 43% 24%, rgba(var(--detail-color-b), .42), transparent 27%),
+      radial-gradient(circle at 62% 40%, rgba(var(--detail-color-c), .40), transparent 28%),
+      radial-gradient(circle at 48% 69%, rgba(var(--detail-color-d), .34), transparent 31%),
       linear-gradient(105deg,
-        rgba(var(--detail-color-base), .82) 0%,
-        rgba(var(--detail-color-base), .38) 46%,
-        rgba(12, 12, 14, .42) 100%);
-    opacity: .82;
+        rgba(var(--detail-color-base), .62) 0%,
+        rgba(var(--detail-color-base), .24) 52%,
+        rgba(12, 12, 14, .26) 100%);
+    opacity: .70;
   }
 
   .detail-shade {
@@ -2496,7 +2501,7 @@ body.film-search-open .film-search-launcher-wrap {
   .films-page:not(.series-page) .detail-heading p {
     max-width: 820px;
     margin: 16px 0 0;
-    white-space: normal;
+    white-space: pre-line;
     color: rgba(255, 255, 255, .78);
     font-size: clamp(15px, 1.15vw, 19px);
     line-height: 1.48;
@@ -2997,3 +3002,759 @@ body.film-search-open .film-search-launcher-wrap {
   }
 }
 
+
+/* ============================================================
+   DETTAGLIO FILM — GEOMETRIA VERTICALE STABILE
+   Riparte dal CSS originale: il poster determina l'altezza della riga,
+   mentre la colonna destra usa uno spacer elastico. In questo modo il
+   bordo inferiore delle card "Film simili" resta allineato al poster
+   anche quando il titolo passa da una a più righe e indipendentemente
+   dall'altezza disponibile nella WebView.
+   ============================================================ */
+@media (min-width: 761px) {
+  .films-page:not(.series-page) .film-detail-view {
+    /* Profilo compatto stabile: non dipende da vh, quindi la barra di
+       avviso del WebView non cambia più la scala relativa del hero. */
+    --stable-detail-poster: clamp(240px, 20vw, 300px);
+  }
+
+  .films-page:not(.series-page) .detail-content {
+    width: min(1510px, calc(100% - 52px));
+    min-height: calc(100dvh - 112px);
+    margin: 68px auto 0;
+    padding-bottom: 30px;
+    grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+    align-items: stretch;
+    align-content: center;
+    gap: clamp(30px, 3.5vw, 54px);
+  }
+
+  .films-page:not(.series-page) .detail-poster-shell {
+    width: var(--stable-detail-poster);
+    height: auto;
+    min-height: 0;
+    aspect-ratio: 2 / 3;
+    align-self: start;
+    justify-self: end;
+  }
+
+  .films-page:not(.series-page) .detail-side {
+    width: var(--premium-detail-copy);
+    max-width: 100%;
+    height: auto;
+    min-height: 0;
+    align-self: stretch;
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    gap: 0;
+  }
+
+  .films-page:not(.series-page) .detail-heading {
+    grid-row: 1;
+    align-self: start;
+  }
+
+  .films-page:not(.series-page) .detail-heading h1 {
+    max-width: 900px;
+    font-size: clamp(32px, 3.4vw, 50px);
+    line-height: .98;
+    letter-spacing: -.03em;
+  }
+
+  .films-page:not(.series-page) .detail-heading p {
+    margin-top: 10px;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+
+  .films-page:not(.series-page) .detail-actions {
+    grid-row: 2;
+    margin-top: 16px;
+  }
+
+  .films-page:not(.series-page) .detail-action {
+    min-height: 44px;
+  }
+
+  .films-page:not(.series-page) .detail-similar-section {
+    grid-row: 4;
+    margin-top: 0;
+    align-self: end;
+  }
+
+  .films-page:not(.series-page) .detail-similar-heading {
+    margin-bottom: 4px;
+  }
+
+  .films-page:not(.series-page) .detail-similar-heading h2 {
+    font-size: clamp(15px, 1.1vw, 19px);
+    line-height: 1.15;
+  }
+
+  .films-page:not(.series-page) .detail-similar-rail {
+    grid-auto-columns: clamp(100px, 7.5vw, 118px);
+    gap: clamp(8px, .65vw, 11px);
+    align-items: end;
+  }
+}
+
+/* Il rail desktop lascia 40px di padding sotto le card e li compensa con
+   un margine negativo di 36px per il glow: i 4px residui vengono corretti
+   qui, così il bordo visibile della card coincide con quello del poster. */
+@media (hover: hover) and (pointer: fine) and (min-width: 761px) {
+  .films-page:not(.series-page) .detail-similar-section {
+    transform: translateY(4px);
+  }
+}
+
+
+/* Barra superiore 2026: titolo/menu/account sono nella shell, ricerca e filtri restano nativi. */
+.film-discovery-header {
+  grid-template-columns: minmax(230px, .72fr) minmax(360px, 760px) minmax(190px, .72fr);
+  min-height: 86px;
+}
+.film-discovery-header::before,
+.music-header::before {
+  background: rgba(20, 20, 20, .82);
+  border-bottom: 1px solid rgba(255, 255, 255, .075);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  backdrop-filter: blur(18px) saturate(1.08);
+}
+.film-discovery-header .films-title {
+  visibility: hidden;
+  pointer-events: none;
+}
+.film-filters-control {
+  margin-right: 56px;
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 761px) and (max-height: 900px) {
+  .film-discovery-header { min-height: 72px; }
+}
+
+@media (max-width: 800px) {
+  .film-discovery-header {
+    grid-template-columns: minmax(150px, 1fr) auto;
+    grid-template-areas:
+      "title filters"
+      "search search";
+    min-height: auto;
+    padding-top: max(10px, env(safe-area-inset-top, 0px));
+  }
+}
+
+
+/* ============================================================
+   RIFINITURA RAIL + TOPBAR
+   Le frecce non riservano più colonne: galleggiano sulle copertine.
+   ============================================================ */
+.film-discovery-header::before,
+.music-header::before {
+  border-bottom: 0;
+  background: rgba(35, 37, 35, .66);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .10);
+  -webkit-backdrop-filter: blur(26px) saturate(1.16);
+  backdrop-filter: blur(26px) saturate(1.16);
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 761px) {
+  .showcase-shell {
+    display: block;
+    margin-inline: 0;
+  }
+
+  .showcase-shell > .poster-rail {
+    grid-column: auto;
+    width: 100%;
+  }
+
+  /* Neutralizza il vecchio spazio laterale creato per il glow/frecce. */
+  .showcase-shell > .poster-rail:not(.detail-similar-rail):not(.music-rail),
+  .detail-similar-shell > .detail-similar-rail {
+    left: 0;
+    width: 100%;
+    padding-left: 2px;
+    padding-right: 2px;
+    scroll-padding-inline: 2px;
+  }
+
+  .showcase-shell > .rail-arrow {
+    position: absolute;
+    z-index: 8;
+    top: 10px;
+    bottom: 14px;
+    width: clamp(38px, 3.1vw, 50px);
+    height: auto;
+    margin: 0;
+    border: 1px solid rgba(255, 255, 255, .18);
+    border-radius: 14px;
+    background: rgba(234, 239, 231, .13);
+    color: rgba(255, 255, 255, .96);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
+    -webkit-backdrop-filter: blur(18px) saturate(1.08);
+    backdrop-filter: blur(18px) saturate(1.08);
+  }
+  .showcase-shell > .rail-arrow-left { left: 6px; }
+  .showcase-shell > .rail-arrow-right { right: 6px; }
+  .showcase-shell > .rail-arrow:hover,
+  .showcase-shell > .rail-arrow:focus-visible {
+    background: rgba(244, 248, 241, .22);
+    border-color: rgba(255, 255, 255, .30);
+    outline: none;
+  }
+}
+
+
+
+/* Gutter laterale ridotto e uniforme per catalogo, titoli, ricerca, filtri e rail. */
+.films-page {
+  padding-left: max(8px, env(safe-area-inset-left, 0px));
+  padding-right: max(8px, env(safe-area-inset-right, 0px));
+}
+
+/* ============================================================
+   RIFINITURA UI — gutter 12px + vetri topbar/ricerca
+   ============================================================ */
+.films-page {
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+
+/* Barra superiore: stessa intensità/tipo di blur del drawer, ma neutra. */
+.film-discovery-header::before,
+.music-header::before {
+  border-bottom: 0;
+  background: rgba(29, 30, 29, .20);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .10);
+  -webkit-backdrop-filter: blur(22px) saturate(.82) brightness(.66);
+  backdrop-filter: blur(22px) saturate(.82) brightness(.66);
+}
+
+/* La ricerca resta un vetro distinto, più leggero e meno sfocato della topbar. */
+.film-search-launcher {
+  border-color: rgba(255, 255, 255, .115);
+  background: rgba(255, 255, 255, .072);
+  -webkit-backdrop-filter: blur(12px) saturate(.94) brightness(.90);
+  backdrop-filter: blur(12px) saturate(.94) brightness(.90);
+}
+.film-search-launcher:hover,
+.film-search-launcher:focus-within,
+.film-search-launcher.active,
+.film-search-open .film-search-launcher {
+  background: rgba(255, 255, 255, .105);
+  -webkit-backdrop-filter: blur(12px) saturate(.94) brightness(.90);
+  backdrop-filter: blur(12px) saturate(.94) brightness(.90);
+}
+
+/* Leggermente più stretta, mantenuta esattamente al centro. */
+@media (min-width: 801px) {
+  .film-discovery-header {
+    grid-template-columns: minmax(220px, .72fr) minmax(340px, 680px) minmax(190px, .72fr);
+  }
+}
+
+
+/* ============================================================
+   RIFINITURA — vetro rail su topbar/ricerca + frecce rail dinamiche
+   ============================================================ */
+.film-discovery-header::before,
+.music-header::before {
+  border-bottom: 0;
+  background: rgba(24, 26, 24, .34);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  backdrop-filter: blur(18px) saturate(1.08);
+}
+
+/* La ricerca usa lo stesso vetro dei pulsanti rail. */
+.film-search-launcher {
+  border-color: rgba(255, 255, 255, .18);
+  background: rgba(234, 239, 231, .13);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  backdrop-filter: blur(18px) saturate(1.08);
+}
+.film-search-launcher:hover,
+.film-search-launcher:focus-within,
+.film-search-launcher.active,
+.film-search-open .film-search-launcher {
+  border-color: rgba(255, 255, 255, .30);
+  background: rgba(244, 248, 241, .22);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  backdrop-filter: blur(18px) saturate(1.08);
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 761px) {
+  .showcase-shell > .rail-arrow {
+    top: var(--baia-rail-cover-top, 10px);
+    bottom: auto;
+    height: var(--baia-rail-cover-height, calc(100% - 24px));
+  }
+  .showcase-shell > .rail-arrow[hidden] {
+    display: none !important;
+  }
+}
+
+/* ============================================================
+   CORREZIONI UI — glow rail, ricerca stabile, back nella shell
+   ============================================================ */
+
+/* Glow rail su un overlay del contenitore: viene disegnato sopra ai pannelli
+   laterali senza intercettare i click delle frecce. */
+.showcase-shell::after {
+  content: "";
+  position: absolute;
+  z-index: 30;
+  left: var(--baia-rail-glow-left, 0);
+  top: var(--baia-rail-glow-top, 0);
+  width: var(--baia-rail-glow-width, 0);
+  height: var(--baia-rail-glow-height, 0);
+  border-radius: var(--baia-rail-glow-radius, var(--cover-radius));
+  box-shadow: var(--cover-hover-glow);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+}
+.showcase-shell.baia-rail-glow-active::after { opacity: 1; }
+
+/* La cornice della ricerca non deve essere visibile: si conserva lo spazio
+   del bordo per non modificare le dimensioni del campo. */
+.film-search-launcher,
+.film-search-launcher:hover,
+.film-search-launcher:focus-within,
+.film-search-launcher.active,
+.film-search-open .film-search-launcher {
+  border-color: transparent;
+}
+
+/* Quando la ricerca viene aperta, la barra conserva le coordinate che aveva
+   nella viewport prima del cambio di stato. In questo modo uno scroll verticale
+   precedente non può più spostare/scomporre l'overlay di ricerca. */
+body.film-search-open .film-search-launcher-wrap {
+  position: fixed;
+  z-index: 60;
+  left: var(--film-search-anchor-left, 50%);
+  top: var(--film-search-anchor-top, 20px);
+  width: var(--film-search-anchor-width, min(680px, 60vw));
+  height: var(--film-search-anchor-height, 48px);
+  transform: none;
+}
+body.film-search-open .film-search-launcher-wrap .film-search-launcher {
+  width: 100%;
+  height: 100%;
+}
+
+/* Nella shell il pulsante Indietro vive nella topbar principale. I vecchi
+   controlli restano disponibili solo fuori dalla shell e nel player fullscreen. */
+html.baia-shell-embedded .film-detail-view .detail-back-button {
+  display: none !important;
+}
+html.baia-shell-embedded .film-player-view:not(:fullscreen) .player-back-button {
+  display: none !important;
+}
+html.baia-shell-embedded .film-player-view:fullscreen .player-back-button {
+  display: inline-flex !important;
+}
+
+
+/* ============================================================
+   PLAYER — pulsante Indietro coerente con la topbar
+   ============================================================ */
+.player-back-button {
+  min-height: 36px;
+  gap: 5px;
+  padding: 0 10px 0 7px;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .075);
+  color: rgba(255, 255, 255, .92);
+  font-size: 13px;
+  font-weight: 650;
+  -webkit-backdrop-filter: blur(12px) saturate(1.04);
+  backdrop-filter: blur(12px) saturate(1.04);
+}
+.player-back-button:hover,
+.player-back-button:focus-visible {
+  background: rgba(255, 255, 255, .13);
+  outline: none;
+}
+.player-back-button > .film-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+/* ============================================================
+   Rifinitura player + risultati ricerca
+   ============================================================ */
+/* Fuori dal fullscreen il titolo del contenuto resta nella shell; nel
+   fullscreen torna visibile nel player. I metadati restano invariati. */
+.film-player-view:not(:fullscreen) .player-heading strong {
+  display: none !important;
+}
+.film-player-view:fullscreen .player-heading strong {
+  display: block !important;
+}
+
+/* Film, Serie e sezioni Lettura condividono questo componente. */
+.search-result-button,
+.search-result-button:hover,
+.search-result-button:focus-visible,
+.search-result-button:active {
+  border: 0 !important;
+  border-color: transparent !important;
+}
+
+/* ============================================================
+   PLAYER — nessuna informazione testuale fuori dal fullscreen
+   + glow rail realmente sopra al vetro laterale
+   ============================================================ */
+
+/* Nel player finestrato la shell contiene già il contesto del contenuto:
+   titolo e metadati del player restano quindi nascosti. In fullscreen
+   ricompaiono entrambi. Vale per Film e Serie perché condividono films.css. */
+.film-player-view:not(:fullscreen) .player-heading {
+  display: none !important;
+}
+.film-player-view:fullscreen .player-heading {
+  display: block !important;
+}
+.film-player-view:fullscreen .player-heading strong,
+.film-player-view:fullscreen .player-heading span {
+  display: block !important;
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 761px) {
+  /* Nelle rail il glow originale della cover starebbe dietro al vetro del pad
+     e verrebbe quindi sfocato. Lo disattiviamo qui: il glow visibile viene
+     disegnato esclusivamente dall'overlay .showcase-shell::after, sopra ai pad. */
+  .showcase-shell .poster-card-button:hover .poster-frame,
+  .showcase-shell .poster-card-button:focus-visible .poster-frame,
+  .showcase-shell .reading-card-button:hover .reading-cover,
+  .showcase-shell .reading-card-button:focus-visible .reading-cover {
+    box-shadow: none !important;
+  }
+
+  /* Il materiale vetro del pad vive in un livello interno. Il bottone stesso
+     non applica più backdrop-filter, evitando che il compositor filtri il glow
+     esterno che viene dipinto successivamente sopra al controllo. */
+  .showcase-shell > .rail-arrow {
+    isolation: isolate;
+    overflow: hidden;
+    background: transparent !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+  .showcase-shell > .rail-arrow::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    background: rgba(234, 239, 231, .13);
+    -webkit-backdrop-filter: blur(18px) saturate(1.08);
+    backdrop-filter: blur(18px) saturate(1.08);
+    transition: background 140ms ease;
+  }
+  .showcase-shell > .rail-arrow:hover::before,
+  .showcase-shell > .rail-arrow:focus-visible::before {
+    background: rgba(244, 248, 241, .22);
+  }
+
+  .showcase-shell::after {
+    z-index: 60;
+  }
+}
+
+/* ============================================================
+   FIX GLOW — preserva overlay sopra i pad senza artefatti interni
+   L'overlay del glow resta sopra ai pannelli laterali; la sola cover attiva
+   viene ridipinta sopra l'overlay, così maschera la porzione interna del blur
+   come accadeva quando il glow apparteneva direttamente alla cover.
+   ============================================================ */
+@media (hover: hover) and (pointer: fine) and (min-width: 761px) {
+  /* La cover resta sopra al glow anche per tutta la dissolvenza in uscita.
+     La classe shield viene rimossa dal bridge solo dopo il fade dell'overlay,
+     evitando il flash della sottile riga interna negli ultimi frame. */
+  .showcase-shell .poster-card-button.baia-rail-glow-shield .poster-frame,
+  .showcase-shell .reading-card-button.baia-rail-glow-shield .reading-cover,
+  .showcase-shell .music-card-button.baia-rail-glow-shield .music-cover {
+    position: relative;
+    z-index: 61;
+  }
+}
+
+/* ============================================================
+   GLOW RAIL — comportamento classico + vetro dei pad sotto al glow
+   ------------------------------------------------------------
+   Film/Serie/Lettura tornano a usare il glow direttamente sulla cover,
+   così ombra e trasformazione restano una sola animazione. Musica resta
+   esclusa: conserva il proprio hover originale (lift + bordo leggero).
+
+   Il vetro dei pad laterali viene dipinto sotto al piano del rail, mentre
+   il solo simbolo della freccia resta sopra. In questo modo il glow può
+   espandersi davanti al vetro senza essere sfocato o coperto dal pad.
+   ============================================================ */
+
+.showcase-shell::after {
+  content: none !important;
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 761px) {
+  .showcase-shell .poster-card-button:hover .poster-frame,
+  .showcase-shell .poster-card-button:focus-visible .poster-frame,
+  .showcase-shell .reading-card-button:hover .reading-cover,
+  .showcase-shell .reading-card-button:focus-visible .reading-cover {
+    box-shadow: var(--cover-hover-glow) !important;
+  }
+
+  .showcase-shell .poster-card-button.baia-rail-glow-shield .poster-frame,
+  .showcase-shell .reading-card-button.baia-rail-glow-shield .reading-cover,
+  .showcase-shell .music-card-button.baia-rail-glow-shield .music-cover {
+    z-index: auto !important;
+  }
+
+  .showcase-shell {
+    isolation: isolate;
+  }
+  .showcase-shell > .poster-rail {
+    position: relative;
+    z-index: 20;
+  }
+
+  .showcase-shell > .rail-arrow {
+    position: relative;
+    z-index: auto !important;
+    isolation: auto !important;
+    overflow: hidden;
+    background: transparent !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+  .showcase-shell > .rail-arrow::before {
+    z-index: 10 !important;
+  }
+
+  .showcase-shell > .rail-arrow .film-icon {
+    position: relative;
+    z-index: 30;
+  }
+}
+
+/* ============================================================
+   FILM / SERIE / LETTURA — glow classico + gutter laterale sotto al glow
+   ---------------------------------------------------------------------
+   Film, Serie, Libri, Fumetti e Manga condividono lo stesso comportamento:
+   il glow appartiene direttamente alla cover e i pulsanti rail restano sopra.
+   Lo scrollport si estende nei 16px di gutter della pagina, mantenendo
+   invariata la posizione visiva delle cover. Musica resta esclusa.
+   ============================================================ */
+@media (hover: hover) and (pointer: fine) and (min-width: 761px) {
+  /* Nessun overlay separato: il glow resta quello nativo della cover. */
+  .films-page:not(.music-page) .showcase-shell::after {
+    content: none !important;
+  }
+
+  .films-page:not(.music-page)
+    .showcase-shell .poster-card-button:hover .poster-frame,
+  .films-page:not(.music-page)
+    .showcase-shell .poster-card-button:focus-visible .poster-frame,
+  .films-page:not(.music-page)
+    .showcase-shell .reading-card-button:hover .reading-cover,
+  .films-page:not(.music-page)
+    .showcase-shell .reading-card-button:focus-visible .reading-cover {
+    box-shadow: var(--cover-hover-glow) !important;
+  }
+
+  /* I 16px di gutter non devono più essere il limite di clipping del rail.
+     18px = 16px recuperati all'esterno + i 2px che il rail aveva già dentro:
+     la prima/ultima cover restano quindi esattamente nella posizione attuale. */
+  .films-page:not(.music-page)
+    .showcase-shell > .poster-rail:not(.music-rail),
+  .films-page:not(.music-page)
+    .detail-similar-shell > .detail-similar-rail {
+    position: relative;
+    left: -16px;
+    width: calc(100% + 32px);
+    padding-left: 18px;
+    padding-right: 18px;
+    scroll-padding-left: 18px;
+    scroll-padding-right: 18px;
+    z-index: 1;
+  }
+
+  /* Il bottone/pad laterale resta sopra al glow, come nel comportamento
+     originale. Rimuoviamo il livello interno introdotto nei tentativi precedenti
+     e rimettiamo il vetro direttamente sul controllo. */
+  .films-page:not(.music-page) .showcase-shell > .rail-arrow {
+    position: absolute !important;
+    z-index: 8 !important;
+    isolation: auto !important;
+    overflow: hidden;
+    background: rgba(234, 239, 231, .13) !important;
+    -webkit-backdrop-filter: blur(18px) saturate(1.08) !important;
+    backdrop-filter: blur(18px) saturate(1.08) !important;
+  }
+
+  .films-page:not(.music-page) .showcase-shell > .rail-arrow::before {
+    content: none !important;
+  }
+
+  .films-page:not(.music-page) .showcase-shell > .rail-arrow:hover,
+  .films-page:not(.music-page) .showcase-shell > .rail-arrow:focus-visible {
+    background: rgba(244, 248, 241, .22) !important;
+  }
+
+  .films-page:not(.music-page) .showcase-shell > .rail-arrow .film-icon {
+    position: relative;
+    z-index: 1;
+  }
+}
+
+/* ============================================================
+   FILTRI — stessa estetica del drawer accorciato
+   Colore/trasparenza, assenza di bordi, blur e hover seguono il drawer.
+   Geometria, spaziature e struttura dei filtri restano quelle originali.
+   ============================================================ */
+.film-filters-panel {
+  border: 0;
+  background: rgba(156, 207, 111, .20);
+  box-shadow: 0 20px 52px rgba(0, 0, 0, .30);
+  -webkit-backdrop-filter: blur(22px) saturate(.82) brightness(.66);
+  backdrop-filter: blur(22px) saturate(.82) brightness(.66);
+}
+
+.film-filters-panel-head {
+  border-bottom: 0;
+}
+
+.filter-home-button {
+  border: 0;
+  background: transparent;
+}
+
+.filter-home-button:hover,
+.filter-home-button:focus-visible {
+  background: rgba(255, 255, 255, .10);
+  color: #fff;
+  outline: none;
+}
+
+.filter-home-button.active {
+  background: rgba(226, 242, 207, .16);
+  color: #fff;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08);
+}
+
+.film-filters-panel .filter-control > .nav-button {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.film-filters-panel .filter-control > .nav-button:hover,
+.film-filters-panel .filter-control > .nav-button:focus-visible,
+.film-filters-panel .filter-control > .nav-button[aria-expanded="true"] {
+  border-color: transparent;
+  background: rgba(255, 255, 255, .10);
+  color: #fff;
+  box-shadow: none;
+  outline: none;
+}
+
+.film-filters-panel .filter-control > .nav-button.has-filter {
+  border-color: transparent;
+  background: rgba(226, 242, 207, .16);
+  color: #fff;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08);
+}
+
+.film-filters-panel .filter-menu,
+.film-filters-panel .director-menu,
+.film-filters-panel .year-menu {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.film-filters-panel .filter-menu-search {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.film-filters-panel .filter-menu-search:focus-within {
+  border-color: transparent;
+  background: rgba(255, 255, 255, .10);
+  color: #fff;
+  box-shadow: none;
+}
+
+.film-filters-panel .filter-menu button:hover {
+  background: rgba(255, 255, 255, .10);
+  color: #fff;
+}
+
+.film-filters-panel .filter-menu button.active {
+  background: rgba(226, 242, 207, .16);
+  color: #fff;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08);
+}
+
+.film-clear-filters-button {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.film-clear-filters-button:hover,
+.film-clear-filters-button:focus-visible {
+  border-color: transparent;
+  background: rgba(255, 255, 255, .10);
+  color: #fff;
+  box-shadow: none;
+  outline: none;
+}
+
+.film-clear-filters-button:disabled,
+.film-clear-filters-button:disabled:hover,
+.film-clear-filters-button:disabled:focus-visible {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* ============================================================
+   FILTRI — allineamento verticale con il drawer
+   Il bordo superiore del pannello aperto segue lo stesso gap sotto la
+   topbar usato dal drawer, senza alterarne estetica o contenuti.
+   ============================================================ */
+@media (hover: hover) and (pointer: fine) and (min-width: 801px) {
+  .film-filters-panel {
+    top: calc(100% + 36px);
+  }
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 801px) and (max-height: 900px) {
+  .film-filters-panel {
+    top: calc(100% + 30px);
+  }
+}
+
+@media (hover: hover) and (pointer: fine) and (max-width: 800px) {
+  .film-filters-panel {
+    top: 100px;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) and (min-width: 721px) and (max-width: 800px) and (max-height: 900px) {
+  .film-filters-panel {
+    top: 86px;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) and (max-width: 800px) {
+  .film-filters-panel {
+    top: calc(68px + max(12px, env(safe-area-inset-top, 0px)));
+  }
+}

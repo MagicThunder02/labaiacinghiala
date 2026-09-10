@@ -184,6 +184,9 @@
   function toggleFiltersPanel() {
     const shouldOpen = elements.filtersPanel.hidden;
     closeMenus();
+    if (shouldOpen && window.parent !== window) {
+      window.parent.postMessage({ type: 'shell-close-drawer' }, window.location.origin);
+    }
     elements.filtersPanel.hidden = !shouldOpen;
     elements.filtersButton.setAttribute('aria-expanded', String(shouldOpen));
     elements.filtersButton.classList.toggle('active', shouldOpen);
@@ -1435,6 +1438,10 @@
   });
   window.addEventListener('message', (event) => {
     if (event.origin !== window.location.origin) return;
+    if (event.data?.type === 'shell-close-transient-panels') {
+      closeFiltersPanel();
+      return;
+    }
     if (event.data?.type === 'shell-page-visibility' && event.data.active === false && state.readerItem) closeReader();
     if (event.data?.type === 'library-metadata-updated') {
       const tasks = [loadHome(), loadFilters()];

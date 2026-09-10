@@ -1,6 +1,7 @@
 (async () => {
   const elements = {
     accountHeading: document.querySelector('#accountHeading'),
+    profileAvatarLarge: document.querySelector('#profileAvatarLarge'),
     accountRoleBadge: document.querySelector('#accountRoleBadge'),
     accountMessage: document.querySelector('#accountMessage'),
     accountDetails: document.querySelector('#accountDetails'),
@@ -95,6 +96,7 @@
 
     if (!authenticated) {
       elements.accountHeading.textContent = 'Nessun account attivo';
+      if (elements.profileAvatarLarge) elements.profileAvatarLarge.textContent = '?';
       elements.accountMessage.textContent = 'Il dispositivo può essere associato al server senza essere collegato a un account.';
       return;
     }
@@ -102,6 +104,9 @@
     const { account } = state;
     const sections = (state.sections || []).map((section) => SECTION_LABELS[section] || section);
     elements.accountHeading.textContent = account.username;
+    if (elements.profileAvatarLarge) {
+      elements.profileAvatarLarge.textContent = String(account.username || '?').trim().charAt(0).toUpperCase() || '?';
+    }
     elements.accountRoleBadge.textContent = roleLabel(account.role);
     elements.accountRoleBadge.hidden = false;
     elements.accountMessage.textContent = account.mustChangePassword

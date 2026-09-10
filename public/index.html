@@ -22,35 +22,38 @@
 </head>
 <body class="auth-pending">
   <div class="app-shell">
-    <aside id="sidebar" class="sidebar" aria-label="Navigazione principale">
-      <button class="sidebar-tab" id="sidebarTab" type="button" aria-label="Apri menu" aria-expanded="false">
-        <span class="ui-icon sidebar-tab-icon" style="--icon-url: url('/icons/sidebar-handle.svg')" aria-hidden="true"></span>
-      </button>
-
-      <div class="brand-panel">
-        <img class="brand-logo" src="/assets/baia-cinghiala.svg" alt="Baia Cinghiala">
+    <header class="shell-topbar" aria-label="Barra superiore">
+      <div class="shell-topbar-left">
+        <button class="shell-menu-button" id="sidebarTab" type="button" aria-label="Apri menu" aria-expanded="false">
+          <span class="ui-icon shell-menu-icon" style="--icon-url: url('/icons/menu.svg')" aria-hidden="true"></span>
+        </button>
+        <button id="shellPageTitle" class="shell-page-title" type="button" aria-label="Vai a Film">Film</button>
+        <button id="shellContextBack" class="shell-context-back" type="button" aria-label="Indietro" hidden>
+          <span class="ui-icon shell-context-back-icon" style="--icon-url: url('/icons/chevron-left.svg')" aria-hidden="true"></span>
+          <span>Indietro</span>
+        </button>
       </div>
 
+      <button id="profileButton" class="shell-profile-button" type="button" aria-label="Apri profilo">
+        <span id="profileAvatar" class="profile-avatar">P</span>
+        <span id="profileName" class="sr-only">Peru</span>
+      </button>
+    </header>
+
+    <aside id="sidebar" class="sidebar" aria-label="Navigazione principale">
       <nav id="mainMenu" class="main-menu" aria-label="Sezioni"></nav>
-
-      <div class="sidebar-spacer"></div>
-
-      <nav id="quickLinks" class="quick-links" aria-label="Collegamenti rapidi"></nav>
-
-      <footer class="sidebar-footer">
-        <div id="userMenu" class="user-menu" hidden>
-          <button type="button" data-open-page="profile">Profilo</button>
-          <button type="button" id="reloadCurrentPage">Ricarica pagina</button>
-          <button type="button" id="logoutAccount">Esci dall’account</button>
-        </div>
-        <button id="profileButton" class="profile-row" type="button" aria-label="Apri profilo">
-          <span id="profileAvatar" class="profile-avatar">P</span>
-          <span id="profileName" class="profile-name">Peru</span>
-        </button>
-        <button id="profileMenuButton" class="profile-menu-button" type="button" aria-label="Menu profilo" aria-expanded="false"></button>
-        <div id="versionLabel" class="version-label">Baia Cinghiala v. 2.0</div>
-      </footer>
+      <nav id="quickLinks" class="quick-links" aria-label="Collegamenti rapidi" hidden></nav>
     </aside>
+
+    <div class="legacy-shell-controls" hidden>
+      <div id="userMenu" class="user-menu" hidden>
+        <button type="button" data-open-page="profile">Profilo</button>
+        <button type="button" id="reloadCurrentPage">Ricarica pagina</button>
+        <button type="button" id="logoutAccount">Esci dall’account</button>
+      </div>
+      <button id="profileMenuButton" class="profile-menu-button" type="button" aria-label="Menu profilo" aria-expanded="false"></button>
+      <div id="versionLabel" class="version-label">Baia Cinghiala v. 2.0</div>
+    </div>
 
     <main class="shell-main">
       <section id="contentArea" class="content-area" aria-live="polite">
