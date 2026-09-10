@@ -438,7 +438,6 @@ body { overflow: hidden; }
 }
 
 
-
 /* Barra superiore 2026: il titolo è mostrato dalla shell principale. */
 .metadata-page {
   padding-top: 0;
@@ -650,3 +649,4 @@ body { overflow: hidden; }
   border-color: transparent;
   outline: 0;
 }
+

@@ -3758,3 +3758,4 @@ html.baia-shell-embedded .film-player-view:fullscreen .player-back-button {
     top: calc(68px + max(12px, env(safe-area-inset-top, 0px)));
   }
 }
+
