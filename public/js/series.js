@@ -555,6 +555,9 @@ function closeFiltersPanel() {
 function toggleFiltersPanel() {
   const shouldOpen = elements.filtersPanel.hidden;
   closeMenus();
+  if (shouldOpen && window.parent !== window) {
+    window.parent.postMessage({ type: 'shell-close-drawer' }, window.location.origin);
+  }
   elements.filtersPanel.hidden = !shouldOpen;
   elements.filtersButton.setAttribute('aria-expanded', String(shouldOpen));
   elements.filtersButton.classList.toggle('active', shouldOpen);
@@ -1364,6 +1367,10 @@ document.addEventListener('keydown', (event) => {
 window.addEventListener('pagehide', saveProgressOnPageExit);
 window.addEventListener('message', (event) => {
   if (event.origin !== window.location.origin) return;
+  if (event.data?.type === 'shell-close-transient-panels') {
+    closeFiltersPanel();
+    return;
+  }
   if (event.data?.type === 'shell-context-back-request') {
     if (!elements.playerView.hidden) closePlayer().catch(handleError);
     else if (!elements.detail.hidden) closeDetails();

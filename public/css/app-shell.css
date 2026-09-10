@@ -2855,7 +2855,7 @@ body.force-sidebar-open .sidebar {
   top: calc(var(--topbar-height) + var(--baia-drawer-vertical-gap));
   bottom: var(--baia-drawer-vertical-gap);
   border: 0;
-  background: rgba(82, 121, 52, .105);
+  background: rgba(124, 181, 72, .16);
   box-shadow: 0 20px 52px rgba(0, 0, 0, .30);
   -webkit-backdrop-filter: blur(22px) saturate(.82) brightness(.66);
   backdrop-filter: blur(22px) saturate(.82) brightness(.66);
@@ -2959,4 +2959,50 @@ body.force-sidebar-open .sidebar {
   border-top: 0;
   -webkit-backdrop-filter: blur(18px) saturate(1.08);
   backdrop-filter: blur(18px) saturate(1.08);
+}
+
+/* ============================================================
+   DRAWER + TITOLO — geometria contenuto e discendenti tipografici
+   ============================================================ */
+.shell-page-title {
+  /* Outfit ha discendenti profondi: il line-height precedente (1) poteva
+     tagliare lettere come la "g" mentre overflow gestisce l'ellipsis. */
+  line-height: 1.16;
+}
+
+.sidebar,
+.sidebar:hover,
+.sidebar:focus-within,
+body.force-sidebar-open .sidebar {
+  /* Il drawer termina dopo l'ultima voce; max-height conserva lo scroll
+     solo quando il contenuto è realmente più alto della viewport. */
+  bottom: auto;
+  height: max-content;
+  max-height: calc(var(--baia-shell-height, 100dvh) - var(--topbar-height) - var(--baia-drawer-vertical-gap) - var(--baia-drawer-vertical-gap));
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .sidebar,
+  .sidebar:hover,
+  .sidebar:focus-within,
+  body.force-sidebar-open .sidebar {
+    bottom: auto;
+    height: max-content;
+    max-height: calc(var(--baia-shell-height, 100dvh) - var(--topbar-height) - var(--baia-drawer-vertical-gap) - var(--baia-drawer-vertical-gap) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  }
+}
+
+
+/* ============================================================
+   DRAWER ACCORCIATO — resa vetro del drawer originale
+   Geometria accorciata invariata; verde e blur coincidono esattamente
+   con il drawer presente nel file iniziale della chat.
+   ============================================================ */
+.sidebar,
+.sidebar:hover,
+.sidebar:focus-within,
+body.force-sidebar-open .sidebar {
+  background: rgba(156, 207, 111, .20);
+  -webkit-backdrop-filter: blur(22px) saturate(.82) brightness(.66);
+  backdrop-filter: blur(22px) saturate(.82) brightness(.66);
 }
