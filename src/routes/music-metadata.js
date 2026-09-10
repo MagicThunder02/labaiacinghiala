@@ -12,6 +12,8 @@ const {
   updateMusicAlbumEmbeddedMetadata,
 } = require('../services/music-album-metadata-edit-service');
 
+const { ContentDeleteError, deleteMusicAlbum } = require('../services/content-delete-service');
+
 const router = express.Router();
 
 function sendMusicMetadataError(res, error) {
@@ -36,6 +38,19 @@ router.get('/albums/:albumId', async (req, res, next) => {
     } catch (unexpected) {
       return next(unexpected);
     }
+  }
+});
+
+
+router.delete('/albums/:albumId', async (req, res, next) => {
+  try {
+    const deleted = await deleteMusicAlbum(req.params.albumId);
+    return res.json({ deleted });
+  } catch (error) {
+    if (error instanceof ContentDeleteError) {
+      return res.status(error.statusCode || 409).json({ error: error.message, code: error.code });
+    }
+    return next(error);
   }
 });
 

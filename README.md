@@ -56,6 +56,25 @@ oppure usa:
 avvia-windows.bat
 ```
 
+## Upload lunghi
+
+Gli upload autorizzati non hanno una scadenza totale di ricezione: possono superare
+i cinque minuti anche con connessioni lente. Se non arrivano dati per 130 secondi,
+Node interrompe la ricezione con HTTP 408 (`UPLOAD_IDLE_TIMEOUT`) e Multer rimuove
+i file parziali. Il timeout termina alla fine della ricezione, prima dell'importazione.
+Le altre richieste conservano un limite di cinque minuti per ricevere il corpo;
+gli header conservano il limite di 60 secondi. Node resta accessibile solo su loopback.
+
+`npm.cmd test` verifica anche upload, interruzioni, pulizia e riuso delle connessioni.
+Per provare il server reale con un trasferimento rallentato di circa 5 minuti e 35
+secondi (database e libreria temporanei, senza usare quelli del server):
+
+```powershell
+$env:BAIA_LONG_UPLOAD_TEST = '1'
+node --test test/server-upload-timeout-integration.test.js
+Remove-Item Env:BAIA_LONG_UPLOAD_TEST
+```
+
 ## Host Linux
 
 Il percorso Direct TCP 443 è supportato anche su host Linux. Node gira come servizio systemd su
