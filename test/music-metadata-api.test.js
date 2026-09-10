@@ -15,7 +15,9 @@ test('API metadati musica usa UUID logici ed è riservata agli amministratori', 
   assert.match(routeSource, /router\.put\('\/tracks\/:trackId'/);
   assert.match(routeSource, /router\.get\('\/albums\/:albumId'/);
   assert.match(routeSource, /router\.put\('\/albums\/:albumId'/);
-  assert.doesNotMatch(routeSource, /router\.(?:patch|delete)\(/);
+  assert.match(routeSource, /router\.delete\('\/albums\/:albumId'/);
+  assert.doesNotMatch(routeSource, /router\.patch\(/);
+  assert.doesNotMatch(routeSource, /router\.delete\('\/tracks\/:trackId'/);
   assert.match(serviceSource, /readMusicFileMetadata/);
   assert.match(serviceSource, /updateMusicFileTags/);
   assert.match(serviceSource, /buildMusicStoragePlan/);

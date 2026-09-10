@@ -1,5 +1,6 @@
 const path = require('node:path');
 const express = require('express');
+const { configureHttpTimeouts } = require('./http-timeouts');
 const config = require('./config');
 const db = require('./database');
 const { reconcileLibraryAvailability } = require('./services/library-reconciliation-service');
@@ -110,6 +111,7 @@ async function startServer() {
       }
     }
   });
+  configureHttpTimeouts(server);
 }
 
 startServer().catch((error) => {
