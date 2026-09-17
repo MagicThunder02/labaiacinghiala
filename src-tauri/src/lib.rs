@@ -7,14 +7,24 @@ mod native_upload;
 mod pairing;
 mod relay_bridge;
 mod transport;
+mod updater;
 
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+
+    // L'updater esiste solo sul desktop: su iOS e Android l'aggiornamento
+    // passa dallo store di sistema.
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+
+    builder
         .setup(|app| {
             #[cfg(target_os = "android")]
             identity::initialize_android_identity_storage(app.handle())
@@ -52,6 +62,8 @@ pub fn run() {
             native_upload::baia_core_upload_files,
             pairing::baia_core_pairing_status,
             pairing::baia_core_pair_with_invite,
+            updater::baia_core_update_status,
+            updater::baia_core_update_install,
         ])
         .run(tauri::generate_context!())
         .expect("errore durante l'avvio di Baia");

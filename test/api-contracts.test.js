@@ -6,6 +6,8 @@ const {
   isPairingRedeemRequest,
   isRelativeApiPath,
   parseApiTransportResponse,
+  parseAppUpdateProgress,
+  parseAppUpdateStatus,
   parseCoreBootstrap,
 } = require('../shared/api-contracts');
 
@@ -48,4 +50,59 @@ test('risposte Core e bootstrap vengono validati prima dell uso frontend', () =>
     transport: 'direct',
     installationId: '550e8400-e29b-41d4-a716-446655440001',
   }).platform, 'ios');
+});
+
+test('lo stato aggiornamento del client viene validato prima di finire nella UI', () => {
+  assert.deepEqual(parseAppUpdateStatus({
+    supported: true,
+    available: true,
+    currentVersion: '0.5.0',
+    latestVersion: '0.6.0',
+    notes: 'Correzioni',
+    publishedAt: '2026-09-18T10:00:00Z',
+    unsupportedReason: null,
+  }), {
+    supported: true,
+    available: true,
+    currentVersion: '0.5.0',
+    latestVersion: '0.6.0',
+    notes: 'Correzioni',
+    publishedAt: '2026-09-18T10:00:00Z',
+    unsupportedReason: null,
+  });
+
+  assert.deepEqual(parseAppUpdateStatus({
+    supported: false,
+    available: false,
+    currentVersion: '0.5.0',
+    unsupportedReason: 'Pacchetto di sistema',
+  }), {
+    supported: false,
+    available: false,
+    currentVersion: '0.5.0',
+    latestVersion: null,
+    notes: null,
+    publishedAt: null,
+    unsupportedReason: 'Pacchetto di sistema',
+  });
+
+  assert.throws(
+    () => parseAppUpdateStatus({ supported: true, available: true, currentVersion: '0.5.0' }),
+    /senza versione utilizzabile/,
+  );
+  assert.throws(() => parseAppUpdateStatus({ supported: true, available: false }), /non valido/);
+});
+
+test('avanzamento aggiornamento accetta solo le fasi note e valori utilizzabili', () => {
+  assert.deepEqual(parseAppUpdateProgress({ phase: 'download', downloaded: 512, total: 1024 }), {
+    phase: 'download',
+    downloaded: 512,
+    total: 1024,
+  });
+  assert.deepEqual(parseAppUpdateProgress({ phase: 'install', downloaded: -5, total: 0 }), {
+    phase: 'install',
+    downloaded: 0,
+    total: null,
+  });
+  assert.throws(() => parseAppUpdateProgress({ phase: 'reboot' }), /non valido/);
 });

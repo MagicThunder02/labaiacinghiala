@@ -1,6 +1,7 @@
 'use strict';
 
 const API_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'DELETE']);
+const APP_UPDATE_PHASES = new Set(['download', 'install', 'restart']);
 
 function isRecord(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -93,12 +94,54 @@ function parsePairingStatus(value) {
   return value;
 }
 
+function parseAppUpdateStatus(value) {
+  if (!isRecord(value)
+    || typeof value.supported !== 'boolean'
+    || typeof value.available !== 'boolean'
+    || typeof value.currentVersion !== 'string') {
+    throw new TypeError('Stato aggiornamento Baia Core non valido.');
+  }
+  const nullableString = (field) => field === null || field === undefined || typeof field === 'string';
+  if (!nullableString(value.latestVersion)
+    || !nullableString(value.notes)
+    || !nullableString(value.publishedAt)
+    || !nullableString(value.unsupportedReason)) {
+    throw new TypeError('Stato aggiornamento Baia Core incompleto.');
+  }
+  // Un aggiornamento disponibile deve dichiarare la versione remota: senza quella
+  // la UI non potrebbe dire all'utente che cosa sta per installare.
+  if (value.available && (!value.supported || typeof value.latestVersion !== 'string' || !value.latestVersion)) {
+    throw new TypeError('Aggiornamento annunciato senza versione utilizzabile.');
+  }
+  return {
+    supported: value.supported,
+    available: value.available,
+    currentVersion: value.currentVersion,
+    latestVersion: value.latestVersion ?? null,
+    notes: value.notes ?? null,
+    publishedAt: value.publishedAt ?? null,
+    unsupportedReason: value.unsupportedReason ?? null,
+  };
+}
+
+function parseAppUpdateProgress(value) {
+  if (!isRecord(value) || !APP_UPDATE_PHASES.has(value.phase)) {
+    throw new TypeError('Avanzamento aggiornamento Baia Core non valido.');
+  }
+  const downloaded = Number.isFinite(value.downloaded) ? Number(value.downloaded) : 0;
+  const total = Number.isFinite(value.total) && Number(value.total) > 0 ? Number(value.total) : null;
+  return { phase: value.phase, downloaded: Math.max(0, downloaded), total };
+}
+
 module.exports = {
   API_METHODS,
+  APP_UPDATE_PHASES,
   isPairingRedeemRequest,
   isRecord,
   isRelativeApiPath,
   parseApiError,
+  parseAppUpdateProgress,
+  parseAppUpdateStatus,
   parseApiTransportResponse,
   parseCoreBootstrap,
   parsePairingStatus,

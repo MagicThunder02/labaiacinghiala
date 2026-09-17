@@ -26,6 +26,18 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "deb"]
+    "targets": ["nsis", "deb", "appimage"],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/MagicThunder02/labaiacinghiala/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJBNDk0ODQ3MTAyQzYyMzgKUldRNFlpd1FSMGhKS3B0V2JxdkVidnBwYkZma2tmNVRnUWtFeXZuYk56V04yb1hlNStFTlM3enMK",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

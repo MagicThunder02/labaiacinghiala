@@ -80,6 +80,31 @@
       </dl>
     </section>
 
+    <section id="appUpdateCard" class="info-card app-update-card" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="section-kicker">Applicazione</p>
+          <h2>Aggiornamenti</h2>
+        </div>
+      </div>
+      <p class="app-update-lead">L’app Baia si aggiorna da sola: scarica l’ultima release firmata e la installa. Il server resta invariato.</p>
+      <dl class="profile-details">
+        <dt>Versione installata</dt><dd id="appUpdateCurrent">—</dd>
+        <dt>Ultima release</dt><dd id="appUpdateLatest">—</dd>
+        <dt>Pubblicata</dt><dd id="appUpdatePublished">—</dd>
+      </dl>
+      <p id="appUpdateNotes" class="app-update-notes" hidden></p>
+      <div id="appUpdateProgress" class="app-update-progress" hidden>
+        <progress id="appUpdateProgressBar" max="100" value="0"></progress>
+        <span id="appUpdateProgressLabel">0%</span>
+      </div>
+      <div class="account-actions">
+        <button id="appUpdateCheck" class="action-button" type="button">Controlla aggiornamenti</button>
+        <button id="appUpdateInstall" class="action-button primary" type="button" hidden>Scarica e installa</button>
+      </div>
+      <p id="appUpdateMessage" class="endpoint-message" role="status" aria-live="polite"></p>
+    </section>
+
     <section id="pairingSettings" class="info-card pairing-settings" hidden>
       <h2>Associa questo dispositivo</h2>
       <p>Genera un invito temporaneo sul PC server e incollalo qui. L’invito Direct può includere automaticamente indirizzo pubblico e identità del Connector; il pairing verifica il dispositivo ma non effettua automaticamente l’accesso a un account.</p>

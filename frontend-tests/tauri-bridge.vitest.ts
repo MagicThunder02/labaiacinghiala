@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  appUpdateStatus,
   coreApiRequest,
   coreBootstrap,
+  installAppUpdate,
   isTauriRuntime,
   pairingStatus,
 } from '../public/_modern/tauri-bridge';
@@ -63,6 +65,64 @@ describe('Tauri bridge', () => {
 
     invoke.mockResolvedValueOnce({ status: '200', ok: true, headers: {}, body: '{}' });
     await expect(coreApiRequest(request)).rejects.toThrow('Risposta del trasporto');
+  });
+
+  it('valida lo stato aggiornamento del client', async () => {
+    const status = {
+      supported: true,
+      available: true,
+      currentVersion: '0.5.0',
+      latestVersion: '0.6.0',
+      notes: 'Correzioni',
+      publishedAt: '2026-09-18T10:00:00Z',
+      unsupportedReason: null,
+    };
+    invoke.mockResolvedValueOnce(status);
+    await expect(appUpdateStatus()).resolves.toEqual(status);
+    expect(invoke).toHaveBeenCalledWith('baia_core_update_status');
+
+    invoke.mockResolvedValueOnce({ supported: true, available: true, currentVersion: '0.5.0' });
+    await expect(appUpdateStatus()).rejects.toThrow('senza versione utilizzabile');
+  });
+
+  it('inoltra l avanzamento valido e ignora i messaggi malformati', async () => {
+    const messages: unknown[] = [];
+    class FakeChannel {
+      onmessage: (message: unknown) => void = () => {};
+    }
+    const created: FakeChannel[] = [];
+    window.__TAURI__ = {
+      core: {
+        invoke,
+        Channel: class extends FakeChannel {
+          constructor() {
+            super();
+            created.push(this);
+          }
+        },
+      },
+    };
+    invoke.mockImplementation(async (_command: string, args?: Record<string, unknown>) => {
+      const channel = args?.onProgress as FakeChannel;
+      channel.onmessage({ phase: 'download', downloaded: 10, total: 100 });
+      channel.onmessage({ phase: 'riavvio-non-previsto' });
+      channel.onmessage({ phase: 'install', downloaded: 100, total: 100 });
+      return undefined;
+    });
+
+    await expect(installAppUpdate((progress) => messages.push(progress))).resolves.toBeUndefined();
+    expect(created).toHaveLength(1);
+    expect(messages).toEqual([
+      { phase: 'download', downloaded: 10, total: 100 },
+      { phase: 'install', downloaded: 100, total: 100 },
+    ]);
+    expect(invoke.mock.calls[0]?.[0]).toBe('baia_core_update_install');
+  });
+
+  it('senza canale di avanzamento l installazione non parte', async () => {
+    window.__TAURI__ = { core: { invoke } };
+    await expect(installAppUpdate()).rejects.toThrow('Baia Core non disponibile');
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it('fallisce esplicitamente fuori da Tauri', async () => {

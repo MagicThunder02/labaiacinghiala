@@ -93,6 +93,13 @@ node --test test/server-upload-timeout-integration.test.js
 Remove-Item Env:BAIA_LONG_UPLOAD_TEST
 ```
 
+## Aggiornamento del client
+
+L'app desktop si aggiorna da sola: Profilo -> Aggiornamenti scarica l'ultima release firmata da
+GitHub, ne verifica la firma minisign e la installa. Il server Node non è toccato e resta
+aggiornato a parte sull'host. Procedura di pubblicazione, chiavi di firma e limiti per pacchetto
+(`deb`, Flatpak, store mobile) sono in [docs/BUILD.md](docs/BUILD.md).
+
 ## Host Linux
 
 Il percorso Direct TCP 443 è supportato anche su host Linux. Node gira come servizio systemd su

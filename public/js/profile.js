@@ -35,6 +35,17 @@
     pairingInviteToken: document.querySelector('#pairingInviteToken'),
     pairingSubmit: document.querySelector('#pairingSubmit'),
     pairingMessage: document.querySelector('#pairingMessage'),
+    appUpdateCard: document.querySelector('#appUpdateCard'),
+    appUpdateCurrent: document.querySelector('#appUpdateCurrent'),
+    appUpdateLatest: document.querySelector('#appUpdateLatest'),
+    appUpdatePublished: document.querySelector('#appUpdatePublished'),
+    appUpdateNotes: document.querySelector('#appUpdateNotes'),
+    appUpdateProgress: document.querySelector('#appUpdateProgress'),
+    appUpdateProgressBar: document.querySelector('#appUpdateProgressBar'),
+    appUpdateProgressLabel: document.querySelector('#appUpdateProgressLabel'),
+    appUpdateCheck: document.querySelector('#appUpdateCheck'),
+    appUpdateInstall: document.querySelector('#appUpdateInstall'),
+    appUpdateMessage: document.querySelector('#appUpdateMessage'),
     coreTransport: document.querySelector('#coreTransport'),
     coreEndpoint: document.querySelector('#coreEndpoint'),
     coreServerStatus: document.querySelector('#coreServerStatus'),
@@ -55,6 +66,7 @@
   });
 
   let accountState = null;
+  let updateStatus = null;
 
   function setMessage(element, message, isError = false) {
     element.textContent = message || '';
@@ -228,6 +240,108 @@
     }
   }
 
+  function showUpdateMessage(message, isError = false) {
+    setMessage(elements.appUpdateMessage, message, isError);
+  }
+
+  function formatBytes(value) {
+    const bytes = Number(value) || 0;
+    if (bytes <= 0) return '';
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} kB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function formatPublishedAt(value) {
+    if (!value) return '—';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return String(value);
+    return parsed.toLocaleString('it-IT', { dateStyle: 'medium', timeStyle: 'short' });
+  }
+
+  function renderUpdateProgress(progress) {
+    const phase = progress?.phase || 'download';
+    const downloaded = Math.max(0, Number(progress?.downloaded) || 0);
+    const total = Number(progress?.total) > 0 ? Number(progress.total) : 0;
+    const bar = elements.appUpdateProgressBar;
+
+    if (phase === 'install' || phase === 'restart') {
+      bar.value = 100;
+      elements.appUpdateProgressLabel.textContent = phase === 'install' ? 'Installazione…' : 'Riavvio…';
+      return;
+    }
+    if (total > 0) {
+      const percent = Math.min(100, Math.round((downloaded / total) * 100));
+      bar.value = percent;
+      elements.appUpdateProgressLabel.textContent = `${percent}% · ${formatBytes(downloaded)} di ${formatBytes(total)}`;
+      return;
+    }
+    // Senza Content-Length la barra resta indeterminata: mostriamo solo i byte scaricati.
+    bar.removeAttribute('value');
+    const scaricati = formatBytes(downloaded);
+    elements.appUpdateProgressLabel.textContent = scaricati ? `Scaricati ${scaricati}` : 'Scaricamento…';
+  }
+
+  function renderUpdateStatus(status) {
+    updateStatus = status || null;
+    elements.appUpdateCurrent.textContent = status?.currentVersion || '—';
+    elements.appUpdateLatest.textContent = status?.latestVersion
+      || (status?.supported ? 'Nessuna più recente' : '—');
+    elements.appUpdatePublished.textContent = formatPublishedAt(status?.publishedAt);
+    // Le note arrivano dalla release remota: restano testo, mai markup interpretato.
+    elements.appUpdateNotes.textContent = status?.notes || '';
+    elements.appUpdateNotes.hidden = !status?.notes;
+    elements.appUpdateInstall.hidden = !status?.available;
+    elements.appUpdateCheck.disabled = !status?.supported;
+
+    if (!status?.supported) {
+      showUpdateMessage(status?.unsupportedReason || 'Aggiornamento automatico non disponibile.');
+      return;
+    }
+    showUpdateMessage(status.available
+      ? `Disponibile la versione ${status.latestVersion}.`
+      : 'Il client è aggiornato.');
+  }
+
+  async function checkForUpdates({ silent = false } = {}) {
+    if (!window.BaiaApi?.appUpdatesAvailable?.()) return null;
+    elements.appUpdateCheck.disabled = true;
+    if (!silent) showUpdateMessage('Controllo in corso…');
+    try {
+      const status = await window.BaiaApi.getAppUpdateStatus();
+      elements.appUpdateCheck.disabled = false;
+      renderUpdateStatus(status);
+      return status;
+    } catch (error) {
+      elements.appUpdateCheck.disabled = false;
+      // Il controllo all'apertura può fallire semplicemente perché il PC è offline:
+      // resta un'informazione, non un errore da segnalare in rosso.
+      if (silent) showUpdateMessage('Controllo aggiornamenti non riuscito: riprova più tardi.');
+      else showUpdateMessage(error?.message || String(error), true);
+      return null;
+    }
+  }
+
+  async function installUpdate() {
+    if (!updateStatus?.available) return;
+    elements.appUpdateInstall.disabled = true;
+    elements.appUpdateCheck.disabled = true;
+    elements.appUpdateProgress.hidden = false;
+    renderUpdateProgress({ phase: 'download', downloaded: 0, total: 0 });
+    showUpdateMessage(`Scaricamento della versione ${updateStatus.latestVersion}…`);
+    try {
+      const report = await window.BaiaApi.installAppUpdate(renderUpdateProgress);
+      renderUpdateProgress({ phase: 'restart' });
+      showUpdateMessage(report?.restarting === false
+        ? `Versione ${report?.installedVersion || updateStatus.latestVersion} installata: riavvia Baia per completarla.`
+        : 'Aggiornamento installato: Baia si sta riavviando…');
+    } catch (error) {
+      elements.appUpdateProgress.hidden = true;
+      elements.appUpdateInstall.disabled = false;
+      elements.appUpdateCheck.disabled = false;
+      showUpdateMessage(error?.message || String(error), true);
+    }
+  }
+
   elements.passwordForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (!accountState?.authenticated) return;
@@ -296,8 +410,17 @@
 
   elements.connectionSettings.hidden = false;
   elements.pairingSettings.hidden = false;
+  elements.appUpdateCard.hidden = false;
+  elements.appUpdateCurrent.textContent = bootstrap.coreVersion;
   renderBootstrap(bootstrap);
-  await Promise.all([loadDeviceIdentity(), refreshProbe(), loadPairingStatus()]);
+  elements.appUpdateCheck.addEventListener('click', () => checkForUpdates());
+  elements.appUpdateInstall.addEventListener('click', installUpdate);
+  await Promise.all([
+    loadDeviceIdentity(),
+    refreshProbe(),
+    loadPairingStatus(),
+    checkForUpdates({ silent: true }),
+  ]);
 
   elements.pairingForm.addEventListener('submit', async (event) => {
     event.preventDefault();

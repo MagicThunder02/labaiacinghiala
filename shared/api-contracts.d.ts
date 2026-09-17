@@ -108,6 +108,29 @@ export interface ApiTransportResponse {
   body: string;
 }
 
+export type AppUpdatePhase = 'download' | 'install' | 'restart';
+
+export interface AppUpdateStatus {
+  supported: boolean;
+  available: boolean;
+  currentVersion: string;
+  latestVersion: string | null;
+  notes: string | null;
+  publishedAt: string | null;
+  unsupportedReason: string | null;
+}
+
+export interface AppUpdateProgress {
+  phase: AppUpdatePhase;
+  downloaded: number;
+  total: number | null;
+}
+
+export interface AppUpdateReport {
+  installedVersion: string;
+  restarting: boolean;
+}
+
 export interface CoreBootstrap {
   coreVersion: string;
   platform: string;
@@ -120,6 +143,10 @@ export function isRecord(value: unknown): value is Record<string, unknown>;
 export function isRelativeApiPath(value: unknown): value is string;
 export function isPairingRedeemRequest(value: unknown): value is PairingRedeemRequest;
 export function parseApiError(value: unknown): ApiErrorPayload | null;
+export function parseAppUpdateStatus(value: unknown): AppUpdateStatus;
+export function parseAppUpdateProgress(value: unknown): AppUpdateProgress;
 export function parseApiTransportResponse(value: unknown): ApiTransportResponse;
 export function parseCoreBootstrap(value: unknown): CoreBootstrap;
 export function parsePairingStatus(value: unknown): PairingStatus;
+export const API_METHODS: ReadonlySet<string>;
+export const APP_UPDATE_PHASES: ReadonlySet<string>;

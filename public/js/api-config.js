@@ -183,6 +183,35 @@
     return status;
   }
 
+  function appUpdatesAvailable() {
+    const tauriCore = getTauriCore();
+    return Boolean(isBundledAppFrontend() && tauriCore?.invoke);
+  }
+
+  // L'aggiornamento del client non dipende dal pairing né dal server Node:
+  // il Core parla soltanto con l'endpoint delle release firmate.
+  async function getAppUpdateStatus() {
+    await ready;
+    const tauriCore = getTauriCore();
+    if (!appUpdatesAvailable()) {
+      throw new Error('L’aggiornamento automatico è disponibile solo nell’app Baia.');
+    }
+    return tauriCore.invoke('baia_core_update_status');
+  }
+
+  async function installAppUpdate(onProgress = null) {
+    await ready;
+    const tauriCore = getTauriCore();
+    if (!appUpdatesAvailable() || !tauriCore.Channel) {
+      throw new Error('L’aggiornamento automatico è disponibile solo nell’app Baia.');
+    }
+    const progressChannel = new tauriCore.Channel();
+    progressChannel.onmessage = (progress) => {
+      if (typeof onProgress === 'function') onProgress(progress || {});
+    };
+    return tauriCore.invoke('baia_core_update_install', { onProgress: progressChannel });
+  }
+
   async function requestAuthHeaders(method, value) {
     await ready;
     if (!isBundledAppFrontend()) return {};
@@ -486,6 +515,9 @@
     getDeviceIdentity,
     getPairingStatus,
     pairWithInvite,
+    appUpdatesAvailable,
+    getAppUpdateStatus,
+    installAppUpdate,
     requestAuthHeaders,
     fetchApi,
     fetchApiJson,

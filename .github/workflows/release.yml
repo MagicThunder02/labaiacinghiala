@@ -1,0 +1,70 @@
+name: Release client
+
+# Il client desktop si aggiorna da solo leggendo latest.json dall'ultima release
+# pubblicata. Questo workflow costruisce i bundle firmati e li allega alla release
+# del tag: finché la release resta in bozza nessun client la vede.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # NSIS: è il bundle che l'updater sostituisce su Windows.
+          - platform: windows-latest
+          # 22.04 mantiene la compatibilità glibc più ampia per l'AppImage,
+          # l'unico formato Linux che l'updater sa sostituire.
+          - platform: ubuntu-22.04
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - name: Verifica che il tag corrisponda alle versioni dichiarate
+        run: node scripts/check-release-version.js "${{ github.ref_name }}"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Installa le dipendenze Tauri per Linux
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Chiave minisign generata con "tauri signer generate": la pubblica sta in
+          # src-tauri/tauri.conf.json, la privata esiste solo qui come secret.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Baia Cinghiala __VERSION__'
+          releaseBody: |
+            Aggiornamento del client Baia Cinghiala.
+
+            Dal client: Profilo → Aggiornamenti → Controlla aggiornamenti.
+            Il server Node non è toccato da questa release.
+          # La bozza va pubblicata a mano: solo allora i client vedono
+          # l'aggiornamento su /releases/latest/download/latest.json.
+          releaseDraft: true
+          prerelease: false
+          includeUpdaterJson: true

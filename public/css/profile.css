@@ -213,11 +213,60 @@
 .pairing-row input { margin-bottom: 0; }
 .pairing-row + .endpoint-message { margin-top: 2px; }
 
+.app-update-card { padding: clamp(18px, 2.4vw, 26px); }
+.app-update-lead {
+  margin: 8px 0 14px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.app-update-notes {
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(244, 248, 241, .055);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .025);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.app-update-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 14px 0 4px;
+}
+.app-update-progress progress {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 8px;
+  border: 0;
+  border-radius: 999px;
+  accent-color: #7fb249;
+  background: rgba(244, 248, 241, .09);
+}
+.app-update-progress progress::-webkit-progress-bar {
+  border-radius: 999px;
+  background: rgba(244, 248, 241, .09);
+}
+.app-update-progress progress::-webkit-progress-value {
+  border-radius: 999px;
+  background: #7fb249;
+}
+.app-update-progress span {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 @media (max-width: 760px) {
   .endpoint-row,
   .pairing-row { grid-template-columns: 1fr; }
   .endpoint-row .action-button,
   .account-actions .action-button { width: 100%; }
+  .app-update-progress { flex-wrap: wrap; }
 }
 @media (max-width: 540px) {
   .profile-account-card { padding: 18px; }

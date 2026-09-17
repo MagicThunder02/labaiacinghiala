@@ -94,9 +94,54 @@ OpenSSL/build tools e Secret Service disponibile nella sessione utente. Quindi:
 npm run tauri build
 ```
 
-La configurazione base include il bundle `deb`. Il test dell'identità richiede una sessione
+La configurazione base include i bundle `deb` e `appimage` (l'AppImage è l'unico formato Linux
+che l'updater sa sostituire da solo). Il test dell'identità richiede una sessione
 D-Bus e un keyring sbloccato; l'assenza del servizio è un errore esplicito, non attiva un
 fallback su file.
+
+## Release firmate e aggiornamento automatico del client
+
+Il client installato si aggiorna dalla propria interfaccia (Profilo -> Aggiornamenti). Perché
+funzioni serve una release GitHub pubblicata con i bundle firmati e `latest.json`.
+
+Chiavi di firma (minisign, generate una sola volta, **mai** nel repository):
+
+```text
+npm run tauri -- signer generate -w "%USERPROFILE%\.baia\baia-updater.key"
+```
+
+- la chiave pubblica sta in `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`);
+- la privata va nei secret del repository come `TAURI_SIGNING_PRIVATE_KEY`, con
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (vuoto se la chiave è senza password);
+- se la chiave viene sostituita, i client già installati non accettano più le nuove release
+  finché non vengono reinstallati a mano: la sostituzione è una decisione, non una manutenzione.
+
+Pubblicare una versione:
+
+1. allinea la versione in `package.json`, `src-tauri/Cargo.toml` e `src-tauri/tauri.conf.json`;
+2. `node scripts/check-release-version.js v0.6.0` deve passare (lo rifà anche la CI);
+3. crea e spingi il tag `v0.6.0`;
+4. `.github/workflows/release.yml` costruisce NSIS (Windows) e AppImage/deb (Ubuntu 22.04),
+   firma i bundle e allega `latest.json` a una release **in bozza**;
+5. pubblica la bozza: solo allora i client vedono l'aggiornamento, perché l'endpoint è
+   `/releases/latest/download/latest.json`.
+
+Da quando `createUpdaterArtifacts` è attivo, una build con bundle aggiornabile (NSIS, AppImage)
+richiede la chiave privata anche in locale, altrimenti il bundler si ferma: è voluto, un bundle
+non firmato non sarebbe installabile dall'updater. In locale:
+
+```powershell
+$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content "$env:USERPROFILE\.baia\baia-updater.key" -Raw
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ''
+npm run tauri build
+```
+
+Per provare l'app senza pacchettizzare resta valido `npm run tauri build -- --debug --no-bundle`,
+che non tocca la firma. Il Flatpak costruisce esplicitamente `--bundles deb` e non è interessato.
+
+L'updater sostituisce NSIS su Windows e AppImage su Linux. Un client installato da `deb` o da
+Flatpak dichiara l'aggiornamento non disponibile e rimanda al gestore pacchetti; su iOS e
+Android l'aggiornamento passa dallo store.
 
 ## macOS client e host
 

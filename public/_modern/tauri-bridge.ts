@@ -1,17 +1,30 @@
 import {
   parseApiTransportResponse,
+  parseAppUpdateProgress,
+  parseAppUpdateStatus,
   parseCoreBootstrap,
   parsePairingStatus,
   type ApiTransportRequest,
   type ApiTransportResponse,
+  type AppUpdateProgress,
+  type AppUpdateStatus,
   type CoreBootstrap,
   type PairingStatus,
 } from '../../shared/api-contracts.js';
 
 type Invoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 
+type ChannelMessage = (message: unknown) => void;
+
+interface ChannelLike {
+  onmessage: ChannelMessage;
+}
+
+type ChannelConstructor = new () => ChannelLike;
+
 interface TauriCoreApi {
   invoke?: Invoke;
+  Channel?: ChannelConstructor;
 }
 
 interface TauriGlobal {
@@ -53,6 +66,29 @@ export async function pairingStatus(): Promise<PairingStatus> {
 
 export async function coreApiRequest(request: ApiTransportRequest): Promise<ApiTransportResponse> {
   return parseApiTransportResponse(await requireInvoke()('baia_core_api_request', { request }));
+}
+
+export async function appUpdateStatus(): Promise<AppUpdateStatus> {
+  return parseAppUpdateStatus(await requireInvoke()('baia_core_update_status'));
+}
+
+export async function installAppUpdate(
+  onProgress?: (progress: AppUpdateProgress) => void,
+): Promise<void> {
+  const api = coreApi();
+  const invoke = api?.invoke;
+  const ChannelCtor = api?.Channel;
+  if (!invoke || !ChannelCtor) throw new Error('Baia Core non disponibile.');
+
+  const channel = new ChannelCtor();
+  channel.onmessage = (message) => {
+    if (!onProgress) return;
+    // Un avanzamento malformato non deve interrompere un'installazione in corso.
+    try {
+      onProgress(parseAppUpdateProgress(message));
+    } catch {}
+  };
+  await invoke('baia_core_update_install', { onProgress: channel });
 }
 
 // Il bridge espone soltanto comandi di dominio noti. Non esiste alcun metodo

@@ -47,9 +47,18 @@ Dal pulsante con l'avatar, oppure dalla pagina **Profilo**, puoi:
 - uscire dall'account;
 - vedere identità del dispositivo, associazione, trasporto ed endpoint in uso;
 - associare il dispositivo con un invito temporaneo;
-- visualizzare o reimpostare l'endpoint del server quando la configurazione tecnica lo richiede.
+- visualizzare o reimpostare l'endpoint del server quando la configurazione tecnica lo richiede;
+- aggiornare l'app dalla scheda **Aggiornamenti**.
 
 Il cambio password invalida gli accessi precedenti sugli altri dispositivi collegati all'account. Per un account senza password configurata, il Profilo permette di impostare la prima password.
+
+### Aggiornare l'app
+
+La scheda **Aggiornamenti** compare solo nell'app Baia installata, non nel browser. All'apertura del Profilo l'app controlla da sola se esiste una versione più recente; il pulsante *Controlla aggiornamenti* ripete la verifica quando vuoi.
+
+Se una nuova versione è disponibile vedi numero di versione, data e note, e il pulsante *Scarica e installa*: l'app scarica il pacchetto ufficiale firmato, lo installa e si riavvia da sola. Non serve scaricare nulla a mano e non serve toccare il server, che viene aggiornato separatamente da chi lo gestisce.
+
+Se l'app è stata installata da un pacchetto di sistema (`deb` o Flatpak su Linux) oppure da uno store, la scheda lo segnala: in quel caso l'aggiornamento si fa con il gestore pacchetti o con lo store.
 
 ### Gestione account — solo amministratori
 

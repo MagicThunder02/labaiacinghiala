@@ -128,9 +128,26 @@ connessioni e chiude SQLite anche in caso di timeout della chiusura HTTP.
 | trasporto | `baia_core_api_request` |
 | media | `baia_core_media_bridge_url` |
 | upload | `baia_core_pick_upload_files`, `baia_core_release_upload_files`, `baia_core_upload_files` |
+| aggiornamento client | `baia_core_update_status`, `baia_core_update_install` |
 
 Il wrapper TypeScript esporta intenzionalmente solo il sottoinsieme richiesto dalla prima
 isola. Ogni estensione deve rimanere tipizzata e orientata a un'operazione Baia specifica.
+
+## Aggiornamento del client
+
+Il client desktop si aggiorna da solo: `src-tauri/src/updater.rs` usa `tauri-plugin-updater`
+per leggere `latest.json` dall'ultima release GitHub pubblicata, verifica la firma minisign con
+la chiave pubblica in `src-tauri/tauri.conf.json` e installa il bundle. Il frontend vede
+soltanto i due comandi di dominio: nessun IPC accetta URL, percorsi o comandi dal chiamante.
+
+- endpoint: `https://github.com/MagicThunder02/labaiacinghiala/releases/latest/download/latest.json`;
+- bundle aggiornabili: NSIS su Windows, AppImage su Linux; `deb` e Flatpak restano al gestore
+  pacchetti e il Core lo dichiara con `supported: false` invece di scaricare;
+- su iOS e Android i comandi rispondono "non supportato": l'aggiornamento passa dallo store;
+- UI: Profilo -> Aggiornamenti, visibile solo dentro l'app, con controllo automatico all'apertura.
+
+Il server Node **non** è coinvolto: quel deploy si aggiorna a parte sull'host (git pull
+pianificata), senza alcuna azione esposta nell'interfaccia.
 
 ## Matrice piattaforme
 
@@ -150,6 +167,7 @@ su hardware Apple.
 
 - `keyring`: backend Windows, Secret Service Linux e Security.framework Apple.
 - `tauri-plugin-dialog` e `tauri-plugin-fs`: selezione e accesso file nativo/mobile.
+- `tauri-plugin-updater` (solo desktop): download e verifica firma delle release del client.
 - `rustls`: TLS 1.3 e pinning nel Core e nel Connector.
 - `node:test`: unità, integrazione, contratti e regressioni UI statiche.
 - test Rust: firma/verifica Ed25519, pairing, allowlist, trasporto, pinning, Range e upload.
