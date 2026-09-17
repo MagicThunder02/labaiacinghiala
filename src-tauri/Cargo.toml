@@ -38,3 +38,8 @@ keyring = { version = "4.1.5", default-features = false, features = ["v1", "wind
 # D-Bus client, no libdbus-dev build dependency required. This is the Linux analogue of the
 # Windows Credential Manager branch above: mirrors it 1:1 in identity.rs.
 keyring = { version = "4.1.5", default-features = false, features = ["v1", "zbus-secret-service-keyring-store"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+# Backend Security.framework nativo: Keychain utente su macOS e Keychain app su iOS.
+# Non viene previsto alcun fallback su file o preferenze in chiaro.
+keyring = { version = "4.1.5", default-features = false, features = ["v1"] }

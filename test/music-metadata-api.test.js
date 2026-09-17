@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const routeSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'music-metadata.js'), 'utf8');
-const serverSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+const appSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'app.js'), 'utf8');
 const serviceSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'music-metadata-edit-service.js'), 'utf8');
 const albumServiceSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'music-album-metadata-edit-service.js'), 'utf8');
 
@@ -25,7 +25,7 @@ test('API metadati musica usa UUID logici ed è riservata agli amministratori', 
   assert.match(albumServiceSource, /withMusicMetadataEditLock/);
   assert.doesNotMatch(routeSource, /file_path|directory_path|relative_path/i);
 
-  const accountPosition = serverSource.indexOf("app.use('/api', createAccountAuth");
-  const metadataPosition = serverSource.indexOf("app.use('/api/metadata/music', requireAdmin, musicMetadataRouter)");
+  const accountPosition = appSource.indexOf("app.use('/api', createAccountAuth");
+  const metadataPosition = appSource.indexOf("app.use('/api/metadata/music', requireAdmin, selectedRouters.musicMetadata)");
   assert.ok(accountPosition >= 0 && metadataPosition > accountPosition);
 });

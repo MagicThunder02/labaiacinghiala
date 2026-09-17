@@ -1,4 +1,5 @@
-const db = require('../database');
+'use strict';
+
 const { isLocalAdminBrowserRequest, normalizeAddress } = require('./local-admin-access');
 const {
   DeviceAuthError,
@@ -6,8 +7,6 @@ const {
   verifyMediaAuthorization,
 } = require('../services/device-auth-service');
 
-const replayCache = new Map();
-const lastSeenWrites = new Map();
 const LAST_SEEN_WRITE_INTERVAL_MS = 30_000;
 
 function requestTarget(req) {
@@ -35,60 +34,77 @@ function headerAuthFromRequest(req) {
   return { deviceId, timestamp, nonce, signature };
 }
 
-function touchLastSeen(deviceId) {
-  const now = Date.now();
-  if (now - Number(lastSeenWrites.get(deviceId) || 0) < LAST_SEEN_WRITE_INTERVAL_MS) return;
-  db.prepare(`
-    UPDATE paired_devices
-    SET last_seen_at = ?
-    WHERE id = ? AND revoked_at IS NULL
-  `).run(now, deviceId);
-  lastSeenWrites.set(deviceId, now);
-}
+function createDeviceAuth({
+  database,
+  replayCache = new Map(),
+  lastSeenWrites = new Map(),
+} = {}) {
+  if (!database) throw new TypeError('Database richiesto per deviceAuth.');
 
-function attachDevice(req, device) {
-  req.baiaDevice = device;
-  touchLastSeen(device.id);
-}
-
-function deviceAuth(req, res, next) {
-  try {
-    const mediaAuth = mediaAuthFromRequest(req);
-    if (mediaAuth && (req.method === 'GET' || req.method === 'HEAD')) {
-      const device = verifyMediaAuthorization(db, mediaAuth, {
-        path: requestPath(req),
-      });
-      attachDevice(req, device);
-      return next();
-    }
-
-    const headerAuth = headerAuthFromRequest(req);
-    if (headerAuth) {
-      const device = verifyRequestAuthorization(db, headerAuth, {
-        method: req.method,
-        target: requestTarget(req),
-        replayCache,
-      });
-      attachDevice(req, device);
-      return next();
-    }
-
-    // Il browser amministrativo è accettato soltanto tramite loopback, con Host e
-    // contesto browser locali verificati e senza indicazioni di proxy. Le richieste
-    // Tauri continuano invece a richiedere sempre la firma del dispositivo.
-    if (isLocalAdminBrowserRequest(req)) {
-      req.baiaLocalAccess = true;
-      return next();
-    }
-
-    throw new DeviceAuthError('AUTH_REQUIRED', 'Dispositivo Baia non autenticato.');
-  } catch (error) {
-    if (!(error instanceof DeviceAuthError)) return next(error);
-    return res.status(error.status || 401).json({ error: error.message, code: error.code });
+  function touchLastSeen(deviceId) {
+    const now = Date.now();
+    if (now - Number(lastSeenWrites.get(deviceId) || 0) < LAST_SEEN_WRITE_INTERVAL_MS) return;
+    database.prepare(`
+      UPDATE paired_devices
+      SET last_seen_at = ?
+      WHERE id = ? AND revoked_at IS NULL
+    `).run(now, deviceId);
+    lastSeenWrites.set(deviceId, now);
   }
+
+  function attachDevice(req, device) {
+    req.baiaDevice = device;
+    touchLastSeen(device.id);
+  }
+
+  return function deviceAuth(req, res, next) {
+    try {
+      const mediaAuth = mediaAuthFromRequest(req);
+      if (mediaAuth && (req.method === 'GET' || req.method === 'HEAD')) {
+        const device = verifyMediaAuthorization(database, mediaAuth, {
+          path: requestPath(req),
+        });
+        attachDevice(req, device);
+        return next();
+      }
+
+      const headerAuth = headerAuthFromRequest(req);
+      if (headerAuth) {
+        const device = verifyRequestAuthorization(database, headerAuth, {
+          method: req.method,
+          target: requestTarget(req),
+          replayCache,
+        });
+        attachDevice(req, device);
+        return next();
+      }
+
+      if (isLocalAdminBrowserRequest(req)) {
+        req.baiaLocalAccess = true;
+        return next();
+      }
+
+      throw new DeviceAuthError('AUTH_REQUIRED', 'Dispositivo Baia non autenticato.');
+    } catch (error) {
+      if (!(error instanceof DeviceAuthError)) return next(error);
+      return res.status(error.status || 401).json({ error: error.message, code: error.code });
+    }
+  };
+}
+
+let defaultDeviceAuth = null;
+
+// Compatibilità con consumer legacy: il database reale viene caricato solo alla
+// prima richiesta, non durante l'import del modulo o della factory Express.
+function deviceAuth(req, res, next) {
+  if (!defaultDeviceAuth) {
+    defaultDeviceAuth = createDeviceAuth({ database: require('../database') });
+  }
+  return defaultDeviceAuth(req, res, next);
 }
 
 module.exports = {
+  createDeviceAuth,
   deviceAuth,
   isLocalAdminBrowserRequest,
   normalizeAddress,

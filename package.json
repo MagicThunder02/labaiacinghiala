@@ -7,6 +7,11 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
+    "dev:frontend": "vite --config vite.config.ts",
+    "build": "npm run typecheck && npm run build:frontend",
+    "build:frontend": "vite build --config vite.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json && svelte-check --tsconfig ./tsconfig.json",
+    "check": "npm run typecheck && npm test",
     "scan": "node src/scan-once.js",
     "test": "node --test",
     "tauri": "tauri",
@@ -24,11 +29,19 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "mime-types": "^3.0.2",
-    "multer": "^2.2.0",
+    "multer": "^2.4.0",
     "pdfjs-dist": "5.4.149",
     "taglib-wasm": "1.6.1"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.11.4"
+    "@sveltejs/vite-plugin-svelte": "^7.3.0",
+    "@tauri-apps/cli": "2.11.4",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^24.13.5",
+    "svelte": "^5.57.0",
+    "svelte-check": "^4.7.6",
+    "typescript": "6.0.3",
+    "vite": "^8.3.0"
   }
 }

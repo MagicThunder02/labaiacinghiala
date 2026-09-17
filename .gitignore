@@ -1,8 +1,7 @@
 node_modules/
+dist/
 .env
-data/*.sqlite
-data/*.sqlite-shm
-data/*.sqlite-wal
+data/
 media/*
 !media/.gitkeep
 npm-debug.log*
@@ -22,3 +21,6 @@ flatpak/.generated/
 build-dir/
 repo/
 *.flatpak
+docs/network_architecture.md
+TODO.md
+.codex-runtime/

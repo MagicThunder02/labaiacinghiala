@@ -242,7 +242,56 @@ fn load_or_create_signing_key() -> Result<(SigningKey, &'static str), String> {
     }
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "android", target_os = "linux")))]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn load_or_create_signing_key() -> Result<(SigningKey, &'static str), String> {
+    use keyring::{Entry, Error};
+
+    #[cfg(target_os = "macos")]
+    const STORAGE_NAME: &str = "macOS Keychain";
+    #[cfg(target_os = "ios")]
+    const STORAGE_NAME: &str = "iOS Keychain";
+
+    let entry = Entry::new(DEVICE_IDENTITY_SERVICE, DEVICE_IDENTITY_ACCOUNT)
+        .map_err(|error| format!("Impossibile aprire {STORAGE_NAME}: {error}"))?;
+
+    match entry.get_secret() {
+        Ok(secret) => {
+            let secret = Zeroizing::new(secret);
+            signing_key_from_secret(&secret[..]).map(|key| (key, STORAGE_NAME))
+        }
+        Err(Error::NoEntry) => {
+            let mut secret = Zeroizing::new([0u8; ED25519_SECRET_LENGTH]);
+            getrandom::fill(&mut secret[..])
+                .map_err(|error| format!("Impossibile generare la chiave crittografica del dispositivo: {error}"))?;
+
+            entry
+                .set_secret(&secret[..])
+                .map_err(|error| format!("Impossibile salvare la chiave privata in {STORAGE_NAME}: {error}"))?;
+
+            let stored = Zeroizing::new(
+                entry
+                    .get_secret()
+                    .map_err(|error| format!("Impossibile rileggere la chiave privata da {STORAGE_NAME}: {error}"))?,
+            );
+            let signing_key = signing_key_from_secret(&stored[..])?;
+            if signing_key.to_bytes() != *secret {
+                return Err(format!("Verifica della persistenza in {STORAGE_NAME} non riuscita."));
+            }
+            Ok((signing_key, STORAGE_NAME))
+        }
+        Err(error) => Err(format!(
+            "Impossibile leggere la chiave privata da {STORAGE_NAME}: {error}"
+        )),
+    }
+}
+
+#[cfg(not(any(
+    target_os = "windows",
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "ios"
+)))]
 fn load_or_create_signing_key() -> Result<(SigningKey, &'static str), String> {
     Err(format!(
         "Custodia sicura dell'identità non ancora implementata per {}.",

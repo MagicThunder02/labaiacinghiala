@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const routeSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'content-upload.js'), 'utf8');
-const serverSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+const appSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'app.js'), 'utf8');
 
 test('API upload musica usa sessioni opache, metodi firmabili e accesso amministrativo', () => {
   assert.match(routeSource, /router\.post\('\/music\/sessions'/);
@@ -19,7 +19,7 @@ test('API upload musica usa sessioni opache, metodi firmabili e accesso amminist
   assert.match(routeSource, /supportedMusicExtensions: supportedMusicExtensions\(\)/);
   assert.match(routeSource, /\{ id: 'music', label: 'Musica', enabled: true \}/);
 
-  const accountPosition = serverSource.indexOf("app.use('/api', createAccountAuth");
-  const uploadPosition = serverSource.indexOf("app.use('/api/uploads', requireAdmin, contentUploadRouter)");
+  const accountPosition = appSource.indexOf("app.use('/api', createAccountAuth");
+  const uploadPosition = appSource.indexOf("app.use('/api/uploads', requireAdmin, selectedRouters.contentUpload)");
   assert.ok(accountPosition >= 0 && uploadPosition > accountPosition);
 });

@@ -14,6 +14,8 @@ pub const DEFAULT_API_BASE_URL: &str = "http://127.0.0.1:3000";
 const CONFIG_FILE_NAME: &str = "connection.json";
 const CONFIG_SCHEMA_VERSION: u32 = 1;
 const PROBE_TIMEOUT: Duration = Duration::from_millis(1200);
+#[cfg(target_os = "ios")]
+const IOS_UNPAIRED_CONNECTOR_ENDPOINT: &str = "https://pairing-required.invalid:443";
 
 // Bootstrap pubblico, deliberatamente temporaneo, solo per l'APK di prova Fase 4B.
 // Non contiene segreti: endpoint LAN e fingerprint pubblica del Connector.
@@ -305,7 +307,14 @@ fn default_connector_endpoint() -> String {
         return ANDROID_TEST_CONNECTOR_ENDPOINT.to_string();
     }
 
-    #[cfg(not(target_os = "android"))]
+    #[cfg(target_os = "ios")]
+    {
+        // Un client iOS non associato non deve mai tentare il Connector su loopback.
+        // Il bootstrap Direct sostituisce questo placeholder con endpoint pubblico e pin.
+        return IOS_UNPAIRED_CONNECTOR_ENDPOINT.to_string();
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         connector_tls::DEFAULT_CONNECTOR_ENDPOINT.to_string()
     }
