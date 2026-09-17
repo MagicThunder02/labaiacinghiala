@@ -1,18 +1,23 @@
+'use strict';
+
 const express = require('express');
-const config = require('../config');
 const packageJson = require('../../package.json');
 
-const router = express.Router();
+function createAppInfoRouter({ config, version = packageJson.version } = {}) {
+  if (!config) throw new TypeError('Configurazione richiesta per il router app-info.');
 
-router.get('/', (req, res) => {
-  res.json({
-    app: {
-      name: config.appDisplayName,
-      uiVersion: config.appUiVersion,
-      serverVersion: packageJson.version,
-      profileName: config.profileName,
-    },
+  const router = express.Router();
+  router.get('/', (req, res) => {
+    res.json({
+      app: {
+        name: config.appDisplayName,
+        uiVersion: config.appUiVersion,
+        serverVersion: version,
+        profileName: config.profileName,
+      },
+    });
   });
-});
+  return router;
+}
 
-module.exports = router;
+module.exports = { createAppInfoRouter };

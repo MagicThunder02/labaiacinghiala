@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const routeSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'music.js'), 'utf8');
-const serverSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+const appSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'app.js'), 'utf8');
 
 test('catalogo musica espone API additive dietro autenticazione account e permesso Musica', () => {
   for (const endpoint of [
@@ -37,7 +37,7 @@ test('catalogo musica espone API additive dietro autenticazione account e permes
   assert.match(routeSource, /router\.put\('\/playlists\/:playlistId\/tracks\/order'/);
   assert.doesNotMatch(routeSource, /router\.(?:patch|delete)\(/);
 
-  const accountPosition = serverSource.indexOf("app.use('/api', createAccountAuth");
-  const musicPosition = serverSource.indexOf("app.use('/api/music', requireSection('music'), musicRouter)");
+  const accountPosition = appSource.indexOf("app.use('/api', createAccountAuth");
+  const musicPosition = appSource.indexOf("app.use('/api/music', requireSection('music'), selectedRouters.music)");
   assert.ok(accountPosition >= 0 && musicPosition > accountPosition);
 });

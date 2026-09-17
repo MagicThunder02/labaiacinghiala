@@ -296,10 +296,10 @@ test('browser locale riceve un principal admin senza creare una sessione nel cli
 });
 
 test('server monta auth dopo deviceAuth, app-info prima di accountAuth e cataloghi dopo accountAuth', () => {
-  const serverSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
-  const devicePosition = serverSource.indexOf("app.use('/api', deviceAuth)");
-  const authPosition = serverSource.indexOf("app.use('/api/auth', createAuthRouter");
-  const appInfoPosition = serverSource.indexOf("app.use('/api/app-info', appInfoRouter)");
+  const serverSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'app.js'), 'utf8');
+  const devicePosition = serverSource.indexOf("app.use('/api', authenticateDevice)");
+  const authPosition = serverSource.indexOf("app.use('/api/auth', selectedRouters.auth)");
+  const appInfoPosition = serverSource.indexOf("app.use('/api/app-info', selectedRouters.appInfo)");
   const accountPosition = serverSource.indexOf("app.use('/api', createAccountAuth");
   const passwordPosition = serverSource.indexOf("app.use('/api', requirePasswordChangeCompleted)");
   const moviesPosition = serverSource.indexOf("app.use('/api/movies', createMovieAccess");

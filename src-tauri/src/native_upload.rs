@@ -16,10 +16,10 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{ipc::Channel, AppHandle, State};
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 use tauri_plugin_fs::{FsExt, OpenOptions};
 use uuid::Uuid;
 
@@ -375,8 +375,8 @@ fn prepare_selected_file(
     })
 }
 
-#[cfg(target_os = "android")]
-fn prepare_android_selected_file(
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn prepare_mobile_selected_file(
     app: &AppHandle,
     state: &NativeUploadState,
     role: &str,
@@ -409,7 +409,7 @@ fn prepare_android_selected_file(
     let mut source = app
         .fs()
         .open(file_path, options)
-        .map_err(|error| format!("Impossibile leggere il file selezionato da Android: {error}"))?;
+        .map_err(|error| format!("Impossibile leggere il file selezionato dal provider mobile: {error}"))?;
     let mut destination = File::create(&temp_path)
         .map_err(|error| format!("Impossibile creare la copia temporanea del file selezionato: {error}"))?;
 
@@ -746,8 +746,8 @@ pub async fn baia_core_pick_upload_files(
 
     let mut prepared = Vec::with_capacity(selected.len());
     for file_path in selected {
-        #[cfg(target_os = "android")]
-        let result = prepare_android_selected_file(
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        let result = prepare_mobile_selected_file(
             &app,
             &state,
             &role,
@@ -756,7 +756,7 @@ pub async fn baia_core_pick_upload_files(
             spec.extensions,
         );
 
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let result = file_path
             .simplified()
             .into_path()

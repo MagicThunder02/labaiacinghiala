@@ -37,10 +37,10 @@ test('Serie simili restituisce al massimo dieci risultati e nessun risultato sen
 
 test('la nuova API Serie simili è additiva e resta sotto il router Serie autenticato', () => {
   const routeSource = fs.readFileSync(path.join(root, 'src/routes/series.js'), 'utf8');
-  const serverSource = fs.readFileSync(path.join(root, 'src/server.js'), 'utf8');
+  const appSource = fs.readFileSync(path.join(root, 'src/app.js'), 'utf8');
 
   assert.match(routeSource, /router\.get\('\/:seriesUuid\/similar'/);
   assert.match(routeSource, /buildSimilarSeriesRows\(currentRow, listSeries\.all\(\), \{ limit: 10 \}\)/);
   assert.match(routeSource, /res\.set\('Cache-Control', 'no-store'\)/);
-  assert.match(serverSource, /app\.use\('\/api\/series', requireSection\('series'\), seriesRouter\)/);
+  assert.match(appSource, /app\.use\('\/api\/series', requireSection\('series'\), selectedRouters\.series\)/);
 });

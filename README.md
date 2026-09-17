@@ -1,8 +1,19 @@
 # Baia Cinghiala
 
+## Guida per l'utente
+
+La documentazione completa delle funzioni disponibili, dell'accesso, dei cataloghi,
+dei player, dell'upload, degli account, del pairing e della manutenzione è in
+[docs/GUIDA-UTENTE.md](docs/GUIDA-UTENTE.md).
+
 Repository sorgente consegnato al PC host il **31 agosto 2026**.
 
 ## Architettura corrente
+
+La mappa tecnica completa, inclusi confini dei componenti, route, servizi, persistenza,
+comandi Tauri e matrice piattaforme, è in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Per sviluppo e build Windows/Linux/macOS/iOS vedere [docs/BUILD.md](docs/BUILD.md); la
+sequenza incrementale è in [docs/REFACTOR-PLAN.md](docs/REFACTOR-PLAN.md).
 
 Il percorso remoto primario deciso per Baia è:
 
@@ -44,6 +55,13 @@ Installa le dipendenze Node:
 npm.cmd ci
 ```
 
+Controlla tipi e frontend statico:
+
+```powershell
+npm.cmd run typecheck
+npm.cmd run build:frontend
+```
+
 Avvia Node:
 
 ```powershell
@@ -82,6 +100,13 @@ Il percorso Direct TCP 443 è supportato anche su host Linux. Node gira come ser
 Script e procedura completa: `tools/direct-host/linux/README.md`.
 
 Requisiti Linux: Node `>=24.18.1 <25`, Rust stable + Cargo, `build-essential` e `pkg-config`.
+
+## Client e host Apple
+
+Il Core Tauri usa macOS Keychain e iOS Keychain senza fallback in chiaro. Il client iOS usa
+soltanto asset statici e Core Rust e raggiunge il Connector remoto: non include Node, SQLite
+host o libreria media. Build, signing, provisioning e test Keychain/iOS richiedono macOS con
+Xcode; i prerequisiti e i comandi sono descritti in `docs/BUILD.md`.
 
 ## Preflight corrente
 

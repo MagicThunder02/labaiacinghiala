@@ -75,6 +75,11 @@ Su Linux **non esiste un percorso di default**: `BAIA_CONNECTOR_DATA_DIR` con pe
 obbligatorio, altrimenti l'avvio fallisce. L'unit systemd generata dagli script Linux lo imposta a
 `/var/lib/baia-connector`.
 
+Su macOS, per un avvio interattivo, l'identita viene salvata per default in
+`~/Library/Application Support/Baia/HostConnector`. Un servizio puo' invece impostare
+`BAIA_CONNECTOR_DATA_DIR` a una directory assoluta dedicata. Sui sistemi Unix i nuovi file
+dell'identita vengono creati con permessi `0600`.
+
 Non cancellare o rigenerare l'identita per risolvere problemi di rete.
 
 ## Preparazione Linux pre-test

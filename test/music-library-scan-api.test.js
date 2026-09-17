@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const routeSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'content-upload.js'), 'utf8');
-const serverSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+const appSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'app.js'), 'utf8');
 
 test('API scansione musica è additiva, immediata e riservata al browser amministrativo locale', () => {
   assert.match(routeSource, /router\.post\('\/music\/scan-library', requireStorage, requireLocalAdministration/);
@@ -15,7 +15,7 @@ test('API scansione musica è additiva, immediata e riservata al browser amminis
   assert.match(routeSource, /scanMusicLibrary\(\)/);
   assert.doesNotMatch(routeSource, /router\.(?:delete|patch)\('\/music\/scan-library/);
 
-  const accountPosition = serverSource.indexOf("app.use('/api', createAccountAuth");
-  const uploadPosition = serverSource.indexOf("app.use('/api/uploads', requireAdmin, contentUploadRouter)");
+  const accountPosition = appSource.indexOf("app.use('/api', createAccountAuth");
+  const uploadPosition = appSource.indexOf("app.use('/api/uploads', requireAdmin, selectedRouters.contentUpload)");
   assert.ok(accountPosition >= 0 && uploadPosition > accountPosition);
 });

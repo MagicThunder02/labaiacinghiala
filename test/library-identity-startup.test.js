@@ -18,9 +18,9 @@ test('lo schema 19 registra una sola identità portabile della libreria', () => 
 
 test('il server verifica l’identità prima di aprire la porta', () => {
   const identityCall = serverSource.indexOf('await ensureLibraryIdentity');
-  const listenCall = serverSource.indexOf('app.listen');
+  const listenCall = serverSource.indexOf('await listen(app, config)');
   assert.ok(identityCall >= 0, 'verifica identità assente');
   assert.ok(listenCall >= 0, 'app.listen assente');
   assert.ok(identityCall < listenCall, 'la porta viene aperta prima della verifica identità');
-  assert.match(serverSource, /startServer\(\)\.catch[\s\S]*process\.exit\(1\)/);
+  assert.match(serverSource, /if \(require\.main === module\)[\s\S]*bootstrap\(\)\.catch/);
 });

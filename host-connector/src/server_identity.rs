@@ -13,6 +13,9 @@ use std::{
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
 const SERVER_IDENTITY_FILENAME: &str = "server-identity-ed25519-v1.pk8";
 const SERVER_IDENTITY_ALGORITHM: &str = "Ed25519";
 const SERVER_DATA_DIR_ENV: &str = "BAIA_CONNECTOR_DATA_DIR";
@@ -99,9 +102,11 @@ fn write_new_identity_atomically(path: &Path, bytes: &[u8]) -> Result<(), String
 
     let temporary = parent.join(format!(".{SERVER_IDENTITY_FILENAME}.{}.tmp", Uuid::new_v4()));
     let write_result = (|| -> Result<(), String> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options
             .open(&temporary)
             .map_err(|error| format!("Impossibile creare il file temporaneo dell'identita server: {error}"))?;
         file.write_all(bytes)
@@ -163,7 +168,19 @@ fn default_identity_path() -> Result<PathBuf, String> {
         .join(SERVER_IDENTITY_FILENAME))
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn default_identity_path() -> Result<PathBuf, String> {
+    let user_home = env::var_os("HOME")
+        .ok_or_else(|| "HOME non disponibile per l'identita server/Connector.".to_string())?;
+    Ok(PathBuf::from(user_home)
+        .join("Library")
+        .join("Application Support")
+        .join("Baia")
+        .join("HostConnector")
+        .join(SERVER_IDENTITY_FILENAME))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn default_identity_path() -> Result<PathBuf, String> {
     Err(format!(
         "Persistenza dell'identita server/Connector non ancora abilitata per {}.",
