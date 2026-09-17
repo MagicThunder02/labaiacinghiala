@@ -115,15 +115,10 @@ test('Film e Serie mettono in pausa senza cancellare la coda e il mini-player no
   assert.match(shell, /musicMiniPlayer\.classList\.toggle\('is-collapsed'/);
   assert.match(shell, /musicMiniRestoreButton\.hidden/);
   assert.doesNotMatch(shell, /applyMusicPagePolicy[\s\S]{0,500}(?:setQueue\(\[\]|clearQueue|musicPlayerState\.clear)/);
-  assert.match(css, /\.sidebar:hover ~ \.music-mini-player/);
-  assert.match(
-    css,
-    /\.sidebar:hover ~ \.music-mini-player[\s\S]*?left:\s*calc\(var\(--sidebar-width\) \+ var\(--sidebar-tab-width\)\)/,
-  );
-  assert.doesNotMatch(
-    css,
-    /\.sidebar:hover ~ \.music-mini-player[\s\S]*?\{[\s\S]*?left:\s*var\(--sidebar-width\)\s*;/,
-  );
+  // Step 21A: il mini-player resta ancorato alla viewport. Il drawer non ne modifica
+  // piu geometria o posizione e, quando aperto, passa semplicemente sopra.
+  assert.match(css, /\.music-mini-player,\s*\.music-mini-restore\s*\{\s*left:\s*0;\s*\}/);
+  assert.doesNotMatch(css, /\.sidebar:hover ~ \.music-mini-player/);
   assert.match(css, /\.music-mini-player\.is-collapsed/);
   assert.match(css, /\.music-mini-restore/);
 });

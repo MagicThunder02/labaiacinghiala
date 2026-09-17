@@ -90,7 +90,7 @@ test('gestione pairing locale espone inviti e dispositivi soltanto nel browser a
 test('interfaccia inviti crea, elenca, filtra e revoca tramite le API locali dello Step 12A', () => {
   assert.match(html, /id="inviteTtlMinutes"[^>]+min="1"[^>]+max="1440"/);
   assert.match(html, /id="createdInviteToken"/);
-  assert.match(html, /mostrato soltanto al momento della creazione/);
+  assert.match(html, /Conserva subito questo invito/);
   assert.match(html, /value="active">Attivi/);
   assert.match(html, /value="used">Usati/);
   assert.match(html, /value="expired">Scaduti/);
@@ -123,7 +123,8 @@ test('layout inviti distingue creazione monouso e cronologia responsiva', () => 
   assert.match(html, /class="invites-layout"/);
   assert.match(html, /class="invite-create-card"/);
   assert.match(html, /class="invite-history-card"/);
-  assert.match(html, /Dopo aver chiuso questo riquadro il token completo non potrà essere recuperato/);
+  // L avviso di monouso vive nel toast del JS, non nel markup del pannello.
+  assert.match(script, /Invito creato\. Copialo subito: verrà mostrato una sola volta\./);
   assert.match(css, /grid-template-columns: minmax\(300px, 430px\) minmax\(0, 1fr\)/);
   assert.match(css, /@media \(max-width: 1060px\)/);
   assert.match(css, /\.invite-status\.active/);

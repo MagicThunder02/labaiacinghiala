@@ -18,7 +18,8 @@ test('Film e Serie condividono il titolo del dettaglio senza ombra e con peso me
   assert.match(seriesHtml, /<header class="detail-heading">[\s\S]*<h1 id="detailTitle">/);
   assert.match(seriesHtml, /<link rel="stylesheet" href="\/css\/films\.css">/);
 
-  assert.match(baseTitleRule, /font-family:\s*"Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif/);
+  // Il titolo usa il font di brand Outfit, non piu il font di sistema.
+  assert.match(baseTitleRule, /font-family:\s*"Outfit", Arial, Helvetica, sans-serif/);
   assert.match(baseTitleRule, /font-weight:\s*500/);
   assert.match(baseTitleRule, /font-synthesis:\s*none/);
   assert.match(baseTitleRule, /text-shadow:\s*none/);

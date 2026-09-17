@@ -50,7 +50,11 @@ test('Serie cerca titolo, anno, genere e registi episodio quando disponibili', (
 test('un secondo clic sulla lente chiude e pulisce la ricerca Film e Serie', () => {
   for (const relativePath of ['public/js/films.js', 'public/js/series.js']) {
     const script = read(relativePath);
-    assert.match(script, /searchModeButton\.addEventListener\('click', \(\) => \{[\s\S]*if \(state\.mode === 'search'\)/);
+    // La lente e il campo sono lo stesso elemento (#searchField avvolge #searchInput):
+    // il secondo clic esce dalla ricerca, ma un clic sull'input riposiziona solo il cursore.
+    assert.match(script, /elements\.searchField\.addEventListener\('click', \(event\) => \{[\s\S]*?exitSearchMode\(\)\.catch\(handleError\)/);
+    assert.match(script, /target === elements\.searchInput \|\| target\.closest\('label\[for="searchInput"\]'\)[\s\S]*?focus\(\{ preventScroll: true \}\)/);
+    assert.doesNotMatch(script, /searchModeButton/);
     assert.match(script, /elements\.searchInput\.value = '';/);
     assert.match(script, /state\.searchResults = \[\];/);
     assert.match(script, /showHome\(\)\.catch\(handleError\)/);

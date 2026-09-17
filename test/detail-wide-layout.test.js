@@ -7,15 +7,37 @@ const root = path.resolve(__dirname, '..');
 const filmsCss = fs.readFileSync(path.join(root, 'public/css/films.css'), 'utf8');
 const seriesCss = fs.readFileSync(path.join(root, 'public/css/series.css'), 'utf8');
 
+// La fascia "molto ampio" e l ultima sezione marcata del file, quindi non ha un
+// marcatore successivo che la delimiti: va ritagliata sul suo @media bilanciando le
+// graffe. Senza questo, la fetta arrivava a fine file e inglobava le sezioni aggiunte
+// dopo (glow copertine, desktop basso...), facendo fallire gli assert doesNotMatch
+// proprio sulle regole che gli altri assert di questo file pretendono che esistano.
+function extractMarkedBlock(css, marker) {
+  const start = css.lastIndexOf(marker);
+  assert.notEqual(start, -1, `marcatore non trovato: ${marker}`);
+  const open = css.indexOf('{', start);
+  assert.notEqual(open, -1, `nessun blocco dopo il marcatore: ${marker}`);
+
+  let depth = 0;
+  for (let index = open; index < css.length; index += 1) {
+    if (css[index] === '{') depth += 1;
+    else if (css[index] === '}') {
+      depth -= 1;
+      if (depth === 0) return css.slice(start, index + 1);
+    }
+  }
+  throw new Error(`blocco non chiuso dopo il marcatore: ${marker}`);
+}
+
 const wideFilmStart = filmsCss.lastIndexOf('/* Desktop ampio:');
 const veryWideFilmStart = filmsCss.lastIndexOf('/* Desktop molto ampio:');
 const wideFilmCss = filmsCss.slice(wideFilmStart, veryWideFilmStart);
-const veryWideFilmCss = filmsCss.slice(veryWideFilmStart);
+const veryWideFilmCss = extractMarkedBlock(filmsCss, '/* Desktop molto ampio:');
 
 const wideSeriesStart = seriesCss.lastIndexOf('/* Desktop ampio:');
 const veryWideSeriesStart = seriesCss.lastIndexOf('/* Desktop molto ampio:');
 const wideSeriesCss = seriesCss.slice(wideSeriesStart, veryWideSeriesStart);
-const veryWideSeriesCss = seriesCss.slice(veryWideSeriesStart);
+const veryWideSeriesCss = extractMarkedBlock(seriesCss, '/* Desktop molto ampio:');
 
 test('Film cresce in modo controllato sui desktop ampi senza usare tutta la viewport', () => {
   assert.match(wideFilmCss, /@media \(min-width: 1600px\) and \(min-height: 850px\)/);

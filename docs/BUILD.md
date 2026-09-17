@@ -11,14 +11,23 @@ Controlli indipendenti dal browser:
 
 ```text
 npm run typecheck
-npm test
+npm run test:backend
+npm run test:frontend
+npm run test:frontend:coverage
+npm run test:rust
+npm run test:all
 npm run build:frontend
 cargo test --locked --manifest-path src-tauri/Cargo.toml
 cargo test --locked --manifest-path host-connector/Cargo.toml
 ```
 
-`npm test` usa `node:test`; non richiede Chrome o WebDriver. `dist/` è un artefatto generato
-e non deve essere modificato a mano.
+`npm run test:backend` usa `node:test` per unità, integrazione API e contratti legacy.
+`npm run test:frontend` usa Vitest e jsdom per eseguire TypeScript e componenti Svelte in un
+DOM isolato, senza Chrome o WebDriver. `npm test` esegue entrambe le suite JavaScript anche
+se una fallisce e restituisce un unico exit code; `npm run test:all` aggiunge typecheck e i
+test Rust di Host Connector e Core Tauri. La CI
+GitHub esegue inoltre la build frontend. `dist/` e `coverage/` sono artefatti generati e non
+devono essere modificati a mano.
 
 ## Sviluppo server e frontend
 

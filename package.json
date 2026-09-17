@@ -13,7 +13,15 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && svelte-check --tsconfig ./tsconfig.json",
     "check": "npm run typecheck && npm test",
     "scan": "node src/scan-once.js",
-    "test": "node --test",
+    "test": "node scripts/run-test-suites.js test:backend test:frontend",
+    "test:backend": "node --test",
+    "test:frontend": "vitest run --config vitest.config.mts",
+    "test:frontend:watch": "vitest --config vitest.config.mts",
+    "test:frontend:coverage": "vitest run --coverage --config vitest.config.mts",
+    "test:rust": "npm run test:rust:connector && npm run test:rust:tauri",
+    "test:rust:connector": "cargo test --locked --manifest-path host-connector/Cargo.toml",
+    "test:rust:tauri": "cargo test --locked --manifest-path src-tauri/Cargo.toml",
+    "test:all": "node scripts/run-test-suites.js typecheck test:backend test:frontend test:rust:connector test:rust:tauri",
     "tauri": "tauri",
     "pairing": "node src/pairing-admin.js",
     "prepare": "node scripts/copy-pdfjs-assets.js",
@@ -39,9 +47,12 @@
     "@types/express": "^5.0.6",
     "@types/multer": "^2.2.0",
     "@types/node": "^24.13.5",
+    "@vitest/coverage-v8": "^4.1.11",
+    "jsdom": "^29.1.1",
     "svelte": "^5.57.0",
     "svelte-check": "^4.7.6",
     "typescript": "6.0.3",
-    "vite": "^8.3.0"
+    "vite": "^8.3.0",
+    "vitest": "^4.1.11"
   }
 }

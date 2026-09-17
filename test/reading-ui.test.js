@@ -18,11 +18,13 @@ test('Libri Fumetti e Manga usano lo stesso catalogo/reader senza URL localhost'
   }
 });
 
-test('copertine reading sono rettangolari e il bookmark e manuale', () => {
+// Lettura condivide con Film/Serie i token --cover-radius e --cover-hover-glow:
+// nessun decoro a riposo, glow durante l interazione.
+test('copertine reading seguono i token copertina condivisi e il bookmark e manuale', () => {
   const css = read('public/css/reading.css');
   const client = read('public/js/reading-library.js');
-  assert.match(css, /\.reading-cover[\s\S]*?border:\s*1px solid transparent;[\s\S]*?border-radius:\s*0/);
-  assert.match(css, /\.reading-card-button:hover \.reading-cover,[\s\S]*?border-color:\s*rgba\(255,255,255,\.56\)/);
+  assert.match(css, /\.reading-cover\s*\{[^}]*?border:\s*0;[^}]*?border-radius:\s*var\(--cover-radius\);[^}]*?box-shadow:\s*none;/);
+  assert.match(css, /\.reading-card-button:hover \.reading-cover,[\s\S]*?box-shadow:\s*var\(--cover-hover-glow\)/);
   assert.match(client, /\/bookmark`?,?\s*\{[\s\S]*?method:\s*'PUT'/);
   assert.doesNotMatch(client, /watch_progress|\/progress/i);
   assert.match(client, /shellImmersive\(true\)/);
@@ -36,19 +38,28 @@ test('raw fetch del reader resta nel layer API autenticato esistente', () => {
   assert.doesNotMatch(bridge, /X-Profile-Key|baiaCinghialaProfileKey/);
 });
 
-test('CBZ ed EPUB risolvono le entry binarie tramite il Media Bridge condiviso', () => {
+// Il routing sul Media Bridge non e cablato nel client: e centralizzato in fetchApi
+// (api-config.js), che per i path bridge passa da authorizeMediaUrl quando l app e
+// bundled. Il client deve quindi restare sul layer API autenticato, come pretende
+// anche il test 'raw fetch del reader resta nel layer API autenticato esistente'.
+// La copertura del routing vive in api-config.test.js.
+test('CBZ ed EPUB risolvono le entry binarie restando sul layer API condiviso', () => {
   const client = read('public/js/reading-library.js');
-  assert.match(client, /const path = `\/api\/reading\/\$\{itemId\}\/reader\/entry\/\$\{entryId\}`/);
-  assert.match(client, /const target = await window\.BaiaPage\.mediaUrl\(path\)/);
-  assert.match(client, /const response = await fetch\(target\)/);
-  assert.doesNotMatch(client, /return rawReaderFetch\(`\/api\/reading\/\$\{itemId\}\/reader\/entry/);
+  const apiConfig = read('public/js/api-config.js');
+  assert.match(client, /return rawReaderFetch\(`\/api\/reading\/\$\{itemId\}\/reader\/entry\/\$\{entryId\}`\)/);
+  assert.match(client, /async function rawReaderFetch\(url\) \{\s*const response = await window\.BaiaPage\.apiFetch\(url\)/);
+  assert.doesNotMatch(client, /await fetch\(`\/api\/reading\/\$\{itemId\}\/reader\/entry/);
+  assert.match(apiConfig, /const isReadingEntry = \/\^\\\/api\\\/reading\\\/\\d\+\\\/reader\\\/entry\\\/\\d\+\$\//);
+  assert.match(apiConfig, /isStreamOrDocument = [^;]*isReadingEntry/);
 });
 
 test('librerie reading riusano testata filtri e ricerca glass di Film/Serie', () => {
   for (const page of ['books.html', 'comics.html', 'manga.html']) {
     const html = read(`public/pages/${page}`);
     assert.match(html, /\/css\/films\.css/);
-    assert.match(html, /id="searchModeButton"/);
+    // La testata glass di Film/Serie usa un campo cliccabile, non un pulsante dedicato.
+    assert.match(html, /id="searchField"/);
+    assert.match(html, /id="searchInput"/);
     assert.match(html, /id="genreButton"/);
     assert.match(html, /id="yearButton"/);
     assert.match(html, /id="authorButton"/);

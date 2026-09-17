@@ -23,7 +23,7 @@ test('CLI e profilo descrivono inviti e dispositivi senza associarli a un accoun
   const profile = read('public/pages/profile.html');
   const profileLogic = read('public/js/profile.js');
   assert.doesNotMatch(cli, /--profile|Profilo:/);
-  assert.match(profile, /pairing verifica il dispositivo, ma non effettua automaticamente l’accesso a un account/i);
+  assert.match(profile, /pairing verifica il dispositivo ma non effettua automaticamente l’accesso a un account/i);
   assert.doesNotMatch(profileLogic, /Associazione legacy|dispositivi legacy/);
 });
 

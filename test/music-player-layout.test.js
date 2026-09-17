@@ -26,7 +26,9 @@ test('titolo e mini-player seguono la rifinitura grafica concordata', () => {
   assert.match(index, /id="musicMiniTitle"/);
   assert.match(index, /id="musicMiniArtist"/);
   assert.match(css, /:root\s*\{\s*--music-mini-player-height:\s*78px/);
-  assert.match(css, /\.music-mini-player\s*\{[\s\S]*background:\s*#000/);
+  // Il mini-player non e piu nero pieno: e un pannello glass coerente con topbar e drawer.
+  assert.match(css, /\.music-mini-player\s*\{[\s\S]*background:\s*rgba\(15, 17, 15, \.46\)/);
+  assert.match(css, /\.music-mini-player\s*\{[\s\S]*backdrop-filter:\s*blur\(18px\) saturate\(1\.08\)/);
   assert.match(css, /\.music-mini-player\s*\{[\s\S]*box-shadow:\s*none/);
   assert.match(css, /\.music-mini-cover\s*\{[\s\S]*width:\s*66px;[\s\S]*height:\s*66px/);
   assert.match(css, /\.music-mini-player\s*\{[\s\S]*--music-mini-inset:\s*6px;[\s\S]*padding:[^;]*var\(--music-mini-inset\)[^;]*var\(--music-mini-inset\);/);

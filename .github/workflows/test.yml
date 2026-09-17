@@ -1,0 +1,42 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  javascript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:backend
+      - if: always()
+        run: npm run test:frontend
+      - if: always()
+        run: npm run build:frontend
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Tauri Linux test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            host-connector
+            src-tauri
+      - run: cargo test --locked --manifest-path host-connector/Cargo.toml
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml

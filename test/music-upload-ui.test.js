@@ -35,7 +35,9 @@ test('Upload Manager abilita Musica e usa le API a sessioni autenticate esistent
 });
 
 test('editor upload Musica modifica i tag reali prima del commit e non gestisce ancora la copertina', () => {
-  assert.match(html, /I tag mostrati sono quelli incorporati nei file/);
+  // La nota estesa e stata sostituita dall eyebrow di sezione e dal detail di sessione.
+  assert.match(html, /<p class="eyebrow">Tag incorporati<\/p>/);
+  assert.match(html, /Seleziona i file per leggere i tag reali\./);
   assert.match(html, /id="musicSaveTagsButton"/);
   assert.match(html, /id="musicImportTrackButton"/);
   assert.match(html, /id="musicImportReadyButton"/);

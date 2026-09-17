@@ -1173,12 +1173,19 @@ elements.filtersButton.addEventListener('click', (event) => {
   toggleFiltersPanel();
 });
 elements.filtersPanel.addEventListener('click', (event) => event.stopPropagation());
-elements.searchField.addEventListener('click', () => {
+elements.searchField.addEventListener('click', (event) => {
   if (state.mode !== 'search') {
     showSearch().catch(handleError);
     return;
   }
-  elements.searchInput.focus({ preventScroll: true });
+  // Un clic sull'input (o sulla sua label sr-only) e intento di scrivere, non di
+  // chiudere: solo il resto del campo fa da toggle verso l'uscita dalla ricerca.
+  const target = event.target instanceof Element ? event.target : null;
+  if (!target || target === elements.searchInput || target.closest('label[for="searchInput"]')) {
+    elements.searchInput.focus({ preventScroll: true });
+    return;
+  }
+  exitSearchMode().catch(handleError);
 });
 elements.searchInput.addEventListener('focus', () => {
   if (state.mode !== 'search') showSearch().catch(handleError);

@@ -19,10 +19,12 @@
   "include": [
     "public/_modern/**/*.ts",
     "public/_modern/**/*.svelte",
+    "frontend-tests/**/*.ts",
     "shared/**/*.d.ts",
     "shared/**/*.js",
     "src/types/**/*.d.ts",
-    "vite.config.ts"
+    "vite.config.ts",
+    "vitest.config.mts"
   ],
   "exclude": ["dist", "node_modules", "src-tauri/target", "host-connector/target"]
 }
