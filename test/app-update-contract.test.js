@@ -39,6 +39,9 @@ test('la configurazione Tauri pubblica endpoint, chiave e artefatti updater', ()
   // Su Linux l'updater sa sostituire soltanto l'AppImage.
   assert.ok(tauriConfig.bundle.targets.includes('appimage'));
   assert.ok(tauriConfig.bundle.targets.includes('nsis'));
+  // Senza icone dichiarate il bundle AppImage si interrompe: "couldn't find a
+  // square icon to use as AppImage icon".
+  assert.ok(tauriConfig.bundle.icon?.includes('icons/128x128.png'));
 });
 
 test('installazioni non aggiornabili vengono riconosciute prima di scaricare', () => {
