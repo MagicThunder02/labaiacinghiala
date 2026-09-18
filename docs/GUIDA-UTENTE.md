@@ -58,7 +58,9 @@ La scheda **Aggiornamenti** compare solo nell'app Baia installata, non nel brows
 
 Se una nuova versione è disponibile vedi numero di versione, data e note, e il pulsante *Scarica e installa*: l'app scarica il pacchetto ufficiale firmato, lo installa e si riavvia da sola. Non serve scaricare nulla a mano e non serve toccare il server, che viene aggiornato separatamente da chi lo gestisce.
 
-Se l'app è stata installata da un pacchetto di sistema (`deb` o Flatpak su Linux) oppure da uno store, la scheda lo segnala: in quel caso l'aggiornamento si fa con il gestore pacchetti o con lo store.
+Su Android il funzionamento è lo stesso, con un passaggio in più: l'app scarica e controlla il pacchetto, poi lo consegna all'installazione di sistema, che chiede conferma. La prima volta Android chiede anche di autorizzare Baia a installare applicazioni; è una spunta da dare una sola volta nelle impostazioni che compaiono in quel momento.
+
+Se l'app è stata installata da un pacchetto di sistema (`deb` o Flatpak su Linux) oppure da uno store, la scheda lo segnala: in quel caso l'aggiornamento si fa con il gestore pacchetti o con lo store. Su iPhone e iPad l'aggiornamento arriva sempre dallo store.
 
 ### Gestione account — solo amministratori
 

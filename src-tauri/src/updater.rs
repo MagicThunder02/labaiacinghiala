@@ -107,12 +107,12 @@ fn truncate_notes(value: &str) -> String {
 
 #[cfg(desktop)]
 mod platform {
-    use super::{UpdateInstallReport, UpdateProgress, UpdateStatus, REASON_LINUX_PACKAGE};
+    use super::{UpdateInstallReport, UpdateProgress, UpdateStatus};
     use std::{
         sync::{Arc, Mutex},
         time::{Duration, Instant},
     };
-    use tauri::{ipc::Channel, AppHandle, Manager};
+    use tauri::{ipc::Channel, AppHandle};
     use tauri_plugin_updater::UpdaterExt;
 
     const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
@@ -129,6 +129,9 @@ mod platform {
     fn unsupported_reason(app: &AppHandle) -> Option<&'static str> {
         #[cfg(target_os = "linux")]
         {
+            use super::REASON_LINUX_PACKAGE;
+            use tauri::Manager;
+
             if app.env().appimage.is_none() {
                 return Some(REASON_LINUX_PACKAGE);
             }

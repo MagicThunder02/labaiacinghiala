@@ -68,3 +68,92 @@ jobs:
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
+
+  android:
+    # Parte dopo i bundle desktop: la release (bozza) deve già esistere per
+    # potervi allegare APK, firma e manifesto.
+    needs: bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0 ndk;27.0.12077973'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      - name: Prepara il keystore di firma Android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANDROID_KEYSTORE_BASE64}" ]; then
+            echo "Manca il secret ANDROID_KEYSTORE_BASE64: senza keystore l'APK non è installabile come aggiornamento." >&2
+            exit 1
+          fi
+          printf '%s' "${ANDROID_KEYSTORE_BASE64}" | base64 -d > "${RUNNER_TEMP}/baia-android.keystore"
+          cat > src-tauri/gen/android/keystore.properties <<PROPS
+          storeFile=${RUNNER_TEMP}/baia-android.keystore
+          storePassword=${ANDROID_KEYSTORE_PASSWORD}
+          keyAlias=${ANDROID_KEY_ALIAS}
+          keyPassword=${ANDROID_KEY_PASSWORD}
+          PROPS
+
+      - name: Build APK di release (arm64)
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
+        run: npm run tauri android build -- --apk --target aarch64
+
+      - name: Firma minisign, manifesto e pubblicazione
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          built="$(find src-tauri/gen/android/app/build/outputs/apk -name '*-release.apk' | head -n1)"
+          if [ -z "${built}" ]; then
+            echo "Nessun APK di release prodotto." >&2
+            exit 1
+          fi
+          apk="${RUNNER_TEMP}/baia-cinghiala_${version}_arm64.apk"
+          cp "${built}" "${apk}"
+
+          # La stessa chiave minisign del desktop: il client verifica la firma
+          # prima di consegnare il pacchetto al package installer.
+          npm run tauri -- signer sign --password "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}" "${apk}"
+
+          node scripts/build-android-manifest.js \
+            --version "${version}" \
+            --url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/$(basename "${apk}")" \
+            --signature "${apk}.sig" \
+            --notes "Aggiornamento del client Baia Cinghiala per Android." \
+            --output "${RUNNER_TEMP}/latest-android.json"
+
+          gh release upload "${TAG}" \
+            "${apk}" "${apk}.sig" "${RUNNER_TEMP}/latest-android.json" \
+            --repo "${GITHUB_REPOSITORY}" --clobber

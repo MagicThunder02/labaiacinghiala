@@ -11,6 +11,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 const updaterCore = read('src-tauri/src/updater.rs').split('#[cfg(test)]')[0];
 const updaterAndroid = read('src-tauri/src/updater_android.rs').split('#[cfg(test)]')[0];
 const androidManifest = read('src-tauri/gen/android/app/src/main/AndroidManifest.xml');
+const androidGitignore = read('src-tauri/gen/android/.gitignore');
 const libCore = read('src-tauri/src/lib.rs');
 const tauriConfig = JSON.parse(read('src-tauri/tauri.conf.json'));
 const cargoManifest = read('src-tauri/Cargo.toml');
@@ -98,6 +99,23 @@ test('la scheda aggiornamenti compare solo con il Core e non blocca il browser l
   const cardReveal = profileScript.indexOf('elements.appUpdateCard.hidden = false');
   assert.ok(browserFallback >= 0 && cardReveal > browserFallback);
   assert.match(profileScript, /checkForUpdates\(\{ silent: true \}\)/);
+});
+
+test('il workflow di release costruisce, firma e pubblica anche l APK Android', () => {
+  assert.match(releaseWorkflow, /needs: bundle/);
+  assert.match(releaseWorkflow, /ANDROID_KEYSTORE_BASE64: \$\{\{ secrets\.ANDROID_KEYSTORE_BASE64 \}\}/);
+  // Senza keystore l'APK non sarebbe installabile sopra quello già distribuito:
+  // meglio fermare la release che pubblicarne uno inservibile.
+  assert.match(releaseWorkflow, /Manca il secret ANDROID_KEYSTORE_BASE64/);
+  assert.match(releaseWorkflow, /tauri android build -- --apk --target aarch64/);
+  assert.match(releaseWorkflow, /signer sign/);
+  assert.match(releaseWorkflow, /scripts\/build-android-manifest\.js/);
+  assert.match(releaseWorkflow, /gh release upload/);
+  // Il keystore vive nel runner, non nell'albero di lavoro, e le sue
+  // credenziali sono già escluse dal progetto Android generato.
+  assert.match(releaseWorkflow, /RUNNER_TEMP\}\/baia-android\.keystore/);
+  assert.doesNotMatch(releaseWorkflow, /src-tauri\/gen\/android\/[^\s]*\.keystore/);
+  assert.match(androidGitignore, /keystore\.properties/);
 });
 
 test('il workflow di release firma i bundle e pubblica latest.json in bozza', () => {

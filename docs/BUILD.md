@@ -143,6 +143,38 @@ L'updater sostituisce NSIS su Windows e AppImage su Linux. Un client installato 
 Flatpak dichiara l'aggiornamento non disponibile e rimanda al gestore pacchetti; su iOS e
 Android l'aggiornamento passa dallo store.
 
+## Client Android
+
+Il progetto nativo sta in `src-tauri/gen/android` ed è **committato**: manifest, permessi e
+configurazione di firma vivono lì. Non va rigenerato con `tauri android init` a cuor leggero,
+perché il comando riscrive i file del template e quindi le personalizzazioni.
+
+Nessuna macchina di sviluppo del progetto ha SDK e NDK Android, quindi la build si fa in CI:
+`.github/workflows/android-build.yml` si lancia a mano e produce un APK di debug arm64 come
+artefatto. Chi ha l'ambiente completo (JDK 17, Android SDK 34, NDK 27, target Rust
+`aarch64-linux-android`) può fare lo stesso in locale:
+
+```bash
+npm run tauri android build -- --debug --apk --target aarch64
+```
+
+### Firma e aggiornamento
+
+Gli APK di release sono firmati con un keystore che **non sta nel repository**; la build di CI lo
+ricostruisce dai secret e scrive `src-tauri/gen/android/keystore.properties`, già ignorato da git.
+Secret necessari:
+
+- `ANDROID_KEYSTORE_BASE64` — il file keystore codificato in base64;
+- `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`.
+
+Il keystore è l'identità dell'app per Android: se cambia, gli aggiornamenti non si installano più
+sopra l'app esistente e gli utenti devono disinstallare e reinstallare. Vale anche per il passaggio
+dall'APK di debug (firmato con la chiave di debug) al primo APK di release.
+
+Ogni release del tag allega alla stessa release GitHub l'APK, la sua firma minisign e
+`latest-android.json`: è il file che il client Android legge per sapere se esiste una versione più
+recente. La firma usa la **stessa** chiave minisign del desktop.
+
 ## macOS client e host
 
 La build deve essere eseguita su macOS con Xcode completo, Command Line Tools, una toolchain

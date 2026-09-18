@@ -143,7 +143,12 @@ soltanto i due comandi di dominio: nessun IPC accetta URL, percorsi o comandi da
 - endpoint: `https://github.com/MagicThunder02/labaiacinghiala/releases/latest/download/latest.json`;
 - bundle aggiornabili: NSIS su Windows, AppImage su Linux; `deb` e Flatpak restano al gestore
   pacchetti e il Core lo dichiara con `supported: false` invece di scaricare;
-- su iOS e Android i comandi rispondono "non supportato": l'aggiornamento passa dallo store;
+- su Android il percorso è separato (`src-tauri/src/updater_android.rs`): il plugin non installa
+  nulla su mobile, quindi il client legge `latest-android.json` dallo stesso endpoint, verifica la
+  firma minisign dell'APK con la stessa chiave e lo consegna al package installer di sistema, che
+  chiede conferma all'utente. La chiamata all'installer passa da JNI (`jni_handle`), senza moduli
+  Kotlin aggiuntivi, e il file sta nella cache dell'app già coperta dal FileProvider;
+- su iOS il comando risponde "non supportato": l'aggiornamento passa dallo store;
 - UI: Profilo -> Aggiornamenti, visibile solo dentro l'app, con controllo automatico all'apertura.
 
 Il server Node **non** è coinvolto: quel deploy si aggiorna a parte sull'host (git pull
@@ -154,6 +159,7 @@ pianificata), senza alcuna azione esposta nell'interfaccia.
 | Funzione | Windows | Linux | macOS | iOS |
 | --- | --- | --- | --- | --- |
 | client Tauri | supportato | supportato | configurato, build da verificare su macOS | configurato, build da verificare con Xcode |
+| aggiornamento in-app | NSIS | AppImage (deb/Flatpak no) | bundle app, da qualificare | no, store di sistema |
 | identità device | Credential Manager | Secret Service | Keychain | Keychain |
 | selezione/upload | path desktop | path desktop | path desktop | provider -> cache privata |
 | Node/SQLite/media host | sì | sì | compatibile, da qualificare su macOS | mai incluso |
@@ -168,6 +174,9 @@ su hardware Apple.
 - `keyring`: backend Windows, Secret Service Linux e Security.framework Apple.
 - `tauri-plugin-dialog` e `tauri-plugin-fs`: selezione e accesso file nativo/mobile.
 - `tauri-plugin-updater` (solo desktop): download e verifica firma delle release del client.
+- `jni`, `minisign-verify`, `semver`, `webpki-roots` (solo Android): manifesto, verifica della firma
+  e consegna dell'APK al package installer. Le radici TLS sono incluse nel binario perché il
+  verificatore di piattaforma di rustls richiederebbe un componente Kotlin.
 - `rustls`: TLS 1.3 e pinning nel Core e nel Connector.
 - `node:test`: unità, integrazione, contratti e regressioni UI statiche.
 - test Rust: firma/verifica Ed25519, pairing, allowlist, trasporto, pinning, Range e upload.
