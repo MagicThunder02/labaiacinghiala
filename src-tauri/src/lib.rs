@@ -13,6 +13,8 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Su mobile non si aggiungono plugin al builder: la mutabilità resta inutilizzata.
+    #[cfg_attr(mobile, allow(unused_mut))]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init());

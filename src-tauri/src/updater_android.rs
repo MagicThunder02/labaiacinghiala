@@ -230,14 +230,17 @@ fn start_system_installer(app: &AppHandle, apk_path: &std::path::Path) -> Result
         .map_err(|_| "Il sistema non ha risposto alla richiesta di installazione.".to_string())?
 }
 
+/// Errori JNI: senza contesto leggibile diventano codici opachi nella UI.
+fn jni_error(context: &'static str) -> impl FnOnce(jni::errors::Error) -> String {
+    move |error| format!("{context}: {error}")
+}
+
 fn launch_install_intent(
     env: &mut jni::JNIEnv<'_>,
     activity: &jni::objects::JObject<'_>,
     apk_path: &str,
 ) -> Result<(), String> {
     use jni::objects::JValue;
-
-    let jni_error = |context: &str| move |error: jni::errors::Error| format!("{context}: {error}");
 
     let package_name = env
         .call_method(activity, "getPackageName", "()Ljava/lang/String;", &[])
