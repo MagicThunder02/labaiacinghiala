@@ -1,6 +1,6 @@
 [package]
 name = "baia-cinghiala"
-version = "0.6.0"
+version = "0.6.1"
 description = "Client desktop Baia Cinghiala"
 authors = ["Baia"]
 edition = "2021"
