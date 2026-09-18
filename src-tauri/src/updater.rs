@@ -15,8 +15,8 @@ use serde::Serialize;
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[allow(dead_code)]
-const REASON_MOBILE: &str =
-    "L'aggiornamento automatico non è disponibile su questa piattaforma: usa lo store di sistema.";
+const REASON_IOS: &str =
+    "Su iPhone e iPad l'aggiornamento arriva dallo store di sistema, non dall'app.";
 #[allow(dead_code)]
 const REASON_LINUX_PACKAGE: &str =
     "Client installato da pacchetto di sistema (deb o Flatpak): aggiornalo con il gestore pacchetti.";
@@ -257,20 +257,27 @@ mod platform {
     }
 }
 
-#[cfg(mobile)]
+// Android ha un percorso tutto suo: il plugin updater su mobile non installa
+// nulla, quindi manifesto, verifica della firma e consegna al package installer
+// sono implementati in updater_android.rs.
+#[cfg(target_os = "android")]
+#[path = "updater_android.rs"]
+mod platform;
+
+#[cfg(target_os = "ios")]
 mod platform {
-    use super::{UpdateInstallReport, UpdateProgress, UpdateStatus, REASON_MOBILE};
+    use super::{UpdateInstallReport, UpdateProgress, UpdateStatus, REASON_IOS};
     use tauri::{ipc::Channel, AppHandle};
 
     pub(super) async fn status(_app: AppHandle) -> Result<UpdateStatus, String> {
-        Ok(UpdateStatus::unsupported(REASON_MOBILE))
+        Ok(UpdateStatus::unsupported(REASON_IOS))
     }
 
     pub(super) async fn install(
         _app: AppHandle,
         _on_progress: Channel<UpdateProgress>,
     ) -> Result<UpdateInstallReport, String> {
-        Err(REASON_MOBILE.to_string())
+        Err(REASON_IOS.to_string())
     }
 }
 
