@@ -1,3 +1,7 @@
 # Gli script eseguiti sull'host Linux devono restare LF anche se il repo viene
 # clonato o modificato su Windows con core.autocrlf=true.
 *.sh text eol=lf
+
+# gradlew è uno script POSIX eseguito dalla CI Linux: con CRLF Gradle non parte.
+src-tauri/gen/android/gradlew text eol=lf
+src-tauri/gen/android/gradle/wrapper/gradle-wrapper.jar binary

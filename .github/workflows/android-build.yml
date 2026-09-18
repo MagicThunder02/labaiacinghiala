@@ -1,9 +1,13 @@
-name: Android init
+name: Android build
 
-# Genera src-tauri/gen/android (assente dal repository) e verifica subito che il
-# client Android compili. Si lancia a mano: non fa parte di nessuna release.
-# Il progetto generato va scaricato dagli artefatti e committato, perché ogni
-# personalizzazione nativa (permessi, provider, icone) vive lì dentro.
+# Costruisce l'APK di debug del client Android dal progetto committato in
+# src-tauri/gen/android. Si lancia a mano: serve a verificare che le modifiche
+# native (manifest, permessi, provider) continuino a compilare, dato che nessuna
+# macchina di sviluppo del progetto ha SDK e NDK Android.
+#
+# Il progetto Android NON viene rigenerato: `tauri android init` sovrascriverebbe
+# i file del template e quindi le personalizzazioni. Se in futuro serve rigenerarlo,
+# va fatto consapevolmente e ricontrollando il diff del manifest.
 on:
   workflow_dispatch:
 
@@ -11,7 +15,7 @@ permissions:
   contents: read
 
 jobs:
-  init:
+  apk:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,7 +36,6 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          # Solo arm64: è l'architettura dei telefoni reali e dimezza i tempi.
           targets: aarch64-linux-android
 
       - uses: Swatinem/rust-cache@v2
@@ -41,28 +44,17 @@ jobs:
 
       - run: npm ci
 
-      - name: Genera il progetto Android
-        env:
-          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
-        run: npm run tauri android init
+      - name: Verifica che il progetto Android sia nel repository
+        run: test -f src-tauri/gen/android/app/src/main/AndroidManifest.xml
 
       - name: Build debug APK (arm64)
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
         run: npm run tauri android build -- --debug --apk --target aarch64
 
-      - name: Archivia il progetto generato
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gen-android
-          path: src-tauri/gen/android
-          include-hidden-files: true
-
-      - name: Archivia l'APK di debug
-        if: always()
-        uses: actions/upload-artifact@v4
         with:
           name: apk-debug
           path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
-          if-no-files-found: warn
+          if-no-files-found: error
