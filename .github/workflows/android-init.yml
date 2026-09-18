@@ -1,0 +1,68 @@
+name: Android init
+
+# Genera src-tauri/gen/android (assente dal repository) e verifica subito che il
+# client Android compili. Si lancia a mano: non fa parte di nessuna release.
+# Il progetto generato va scaricato dagli artefatti e committato, perché ogni
+# personalizzazione nativa (permessi, provider, icone) vive lì dentro.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  init:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.1
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0 ndk;27.0.12077973'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Solo arm64: è l'architettura dei telefoni reali e dimezza i tempi.
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      - name: Genera il progetto Android
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
+        run: npm run tauri android init
+
+      - name: Build debug APK (arm64)
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
+        run: npm run tauri android build -- --debug --apk --target aarch64
+
+      - name: Archivia il progetto generato
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gen-android
+          path: src-tauri/gen/android
+          include-hidden-files: true
+
+      - name: Archivia l'APK di debug
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-debug
+          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: warn
