@@ -1,6 +1,6 @@
 {
   "name": "cinema-amici",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "Media server domestico modulare con Node.js, Express, SQLite e frontend HTML a pagine.",
   "main": "src/server.js",
