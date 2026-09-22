@@ -42,6 +42,154 @@ const touchLayoutMedia = window.matchMedia(TOUCH_LAYOUT_QUERY);
 const PLAYER_VOLUME_STORAGE_KEY = 'baia-player-volume';
 const CATALOG_PAGE_SIZE = 50;
 const PROGRESS_CHECKPOINT_SECONDS = 30;
+const APP_INTRO_DURATION_MS = 9000;
+const APP_INTRO_REDUCED_MOTION_MS = 1200;
+const INTRO_RAIL_PREFETCH_CONCURRENCY = 6;
+const INTRO_RAIL_PREFETCH_STOP_MARGIN_MS = 180;
+
+function getAppIntroPrefetchWindow() {
+  if (window.parent === window) return null;
+
+  try {
+    const parentDocument = window.parent.document;
+    if (!parentDocument.documentElement.classList.contains('baia-native-app')) return null;
+
+    const startedAt = Number(window.parent.__BAIA_INTRO_STARTED_AT__);
+    if (!Number.isFinite(startedAt)) return null;
+
+    const reduceMotion = window.parent.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const durationMs = reduceMotion ? APP_INTRO_REDUCED_MOTION_MS : APP_INTRO_DURATION_MS;
+    const elapsedMs = window.parent.performance.now() - startedAt;
+    const remainingMs = Math.max(0, durationMs - elapsedMs);
+
+    if (remainingMs <= INTRO_RAIL_PREFETCH_STOP_MARGIN_MS) return null;
+    return {
+      durationMs,
+      deadline: window.parent.performance.now() + remainingMs,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function introPrefetchTimeRemaining(deadline) {
+  try {
+    return Math.max(0, deadline - window.parent.performance.now());
+  } catch {
+    return 0;
+  }
+}
+
+function imageIntersectsViewport(image) {
+  const rect = image.getBoundingClientRect();
+  const width = window.innerWidth || document.documentElement.clientWidth || 0;
+  const height = window.innerHeight || document.documentElement.clientHeight || 0;
+  return rect.right > 0 && rect.left < width && rect.bottom > 0 && rect.top < height;
+}
+
+function buildHomeRailPrefetchQueue() {
+  const rails = [elements.recentRail, elements.latestRail, elements.recommendedRail]
+    .filter(Boolean)
+    .map((rail) => Array.from(rail.querySelectorAll('.poster-image')));
+
+  // Prima completa eventuali cover ancora mancanti nel viewport.
+  const visiblePending = rails
+    .flat()
+    .filter((image) => !image.complete && imageIntersectsViewport(image));
+
+  // Poi procede a ventaglio: prima la prima cover nascosta di ogni rail,
+  // poi la seconda, ecc. Così uno scroll su qualunque rail trova già contenuti pronti.
+  const offscreenByRail = rails.map((images) => images.filter((image) => !imageIntersectsViewport(image)));
+  const offscreen = [];
+  const longestRail = Math.max(0, ...offscreenByRail.map((images) => images.length));
+  for (let index = 0; index < longestRail; index += 1) {
+    for (const images of offscreenByRail) {
+      const image = images[index];
+      if (image) offscreen.push(image);
+    }
+  }
+
+  return [...new Set([...visiblePending, ...offscreen])];
+}
+
+function prefetchPosterElement(image, deadline) {
+  if (!image) return Promise.resolve();
+
+  image.loading = 'eager';
+  image.decoding = 'async';
+  try { image.fetchPriority = 'low'; } catch {}
+
+  const remainingMs = introPrefetchTimeRemaining(deadline);
+  if (remainingMs <= INTRO_RAIL_PREFETCH_STOP_MARGIN_MS) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer = 0;
+    let sourceObserver = null;
+
+    const hasSource = () => Boolean(image.currentSrc || image.getAttribute('src'));
+    const isReady = () => hasSource() && image.complete && image.naturalWidth > 0;
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      sourceObserver?.disconnect();
+      image.removeEventListener('load', onLoad);
+      image.removeEventListener('error', finish);
+      resolve();
+    };
+
+    const onLoad = () => {
+      const decoded = image.decode?.();
+      if (decoded?.then) decoded.catch(() => {}).finally(finish);
+      else finish();
+    };
+
+    image.addEventListener('load', onLoad, { once: true });
+    image.addEventListener('error', finish, { once: true });
+
+    if (!hasSource()) {
+      sourceObserver = new MutationObserver(() => {
+        if (!hasSource()) return;
+        sourceObserver?.disconnect();
+        sourceObserver = null;
+        if (isReady()) onLoad();
+      });
+      sourceObserver.observe(image, { attributes: true, attributeFilter: ['src'] });
+    }
+
+    // Non aspettiamo mai oltre la finestra residua dell'intro. La richiesta già
+    // iniziata può terminare in background, ma non blocca né prolunga l'intro.
+    timer = window.setTimeout(
+      finish,
+      Math.max(1, Math.min(1400, remainingMs - INTRO_RAIL_PREFETCH_STOP_MARGIN_MS)),
+    );
+
+    if (isReady()) onLoad();
+  });
+}
+
+async function prefetchHomeRailPostersDuringIntro() {
+  const introWindow = getAppIntroPrefetchWindow();
+  if (!introWindow || state.mode !== 'home') return;
+
+  const queue = buildHomeRailPrefetchQueue();
+  if (!queue.length) return;
+
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < queue.length) {
+      if (introPrefetchTimeRemaining(introWindow.deadline) <= INTRO_RAIL_PREFETCH_STOP_MARGIN_MS) return;
+      const image = queue[cursor];
+      cursor += 1;
+      await prefetchPosterElement(image, introWindow.deadline);
+    }
+  };
+
+  const workerCount = Math.min(INTRO_RAIL_PREFETCH_CONCURRENCY, queue.length);
+  await Promise.allSettled(Array.from({ length: workerCount }, () => worker()));
+}
 
 function usesTouchLayout() {
   return touchLayoutMedia.matches;
@@ -723,6 +871,25 @@ async function loadHome() {
   renderRail(elements.recentRail, elements.recentEmpty, payload.recent || []);
   renderRail(elements.latestRail, elements.latestEmpty, payload.latest || []);
   renderRail(elements.recommendedRail, elements.recommendedEmpty, payload.recommended || []);
+}
+
+async function waitForInitialHomeVisuals() {
+  const images = Array.from(elements.homeView.querySelectorAll('.poster-image')).slice(0, 12);
+  if (!images.length) return;
+
+  const imageReady = (image) => {
+    if (image.complete) return image.decode?.().catch(() => {}) || Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => resolve();
+      image.addEventListener('load', done, { once: true });
+      image.addEventListener('error', done, { once: true });
+    });
+  };
+
+  await Promise.race([
+    Promise.allSettled(images.map(imageReady)),
+    new Promise((resolve) => window.setTimeout(resolve, 1800)),
+  ]);
 }
 
 async function loadCatalog({ append = false } = {}) {
@@ -1523,4 +1690,13 @@ window.addEventListener('message', (event) => {
   }
 });
 
-Promise.all([loadFilters(), loadHome()]).catch(handleError);
+Promise.all([loadFilters(), loadHome()])
+  .then(waitForInitialHomeVisuals)
+  .catch(handleError)
+  .finally(() => {
+    window.parent.postMessage({ type: 'shell-page-ready', pageId: 'films' }, window.location.origin);
+    // La home critica è pronta: durante gli eventuali secondi residui dell'intro
+    // usiamo la rete per anticipare le cover off-screen dei rail. È best-effort
+    // e non può ritardare la scomparsa dell'intro.
+    void prefetchHomeRailPostersDuringIntro();
+  });

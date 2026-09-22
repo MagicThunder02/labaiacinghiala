@@ -3006,3 +3006,220 @@ body.force-sidebar-open .sidebar {
   -webkit-backdrop-filter: blur(22px) saturate(.82) brightness(.66);
   backdrop-filter: blur(22px) saturate(.82) brightness(.66);
 }
+
+/* === BAIA NATIVE APP INTRO V1 ===
+   App-only startup cover. The same gradient used by the account gate is drawn
+   locally; SVG layers are bundled in the Tauri frontend and require no API call.
+*/
+.app-intro {
+  display: none;
+}
+
+html.baia-native-app .app-intro {
+  position: fixed;
+  z-index: 10000;
+  inset: 0;
+  display: block;
+  overflow: hidden;
+  pointer-events: auto;
+  user-select: none;
+  opacity: 1;
+  background:
+    radial-gradient(circle at 20% 15%, rgba(111, 145, 63, .28), transparent 36%),
+    radial-gradient(circle at 82% 78%, rgba(86, 109, 50, .22), transparent 34%),
+    #2f332d;
+  transition: opacity 320ms ease;
+  contain: layout paint;
+}
+
+html.baia-native-app .app-intro.is-exiting {
+  opacity: 0;
+  pointer-events: none;
+}
+
+html.baia-native-app .app-intro[hidden] {
+  display: none !important;
+}
+
+.app-intro-emblem {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 46.3vmin;
+  height: 46.3vmin;
+  transform: translate(-50%, -50%) scale(1);
+  transform-origin: 50% 50%;
+  animation: baia-intro-emblem-motion 9s linear both;
+  will-change: transform;
+}
+
+.app-intro-ring {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  border: clamp(3px, .65vmin, 10px) solid #fff;
+  border-radius: 50%;
+  opacity: 0;
+  animation: baia-intro-ring-in 9s linear both;
+}
+
+.app-intro-boar-stack {
+  position: absolute;
+  inset: 0;
+}
+
+.app-intro-boar,
+.app-intro-eyepatch {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  pointer-events: none;
+}
+
+.app-intro-boar-open {
+  opacity: 0;
+  visibility: visible;
+  animation: baia-intro-boar-open 9s linear both;
+  will-change: opacity;
+}
+
+.app-intro-boar-wink {
+  opacity: 0;
+  visibility: hidden;
+  animation: baia-intro-boar-wink 9s linear both;
+  will-change: opacity;
+}
+
+.app-intro-eyepatch {
+  opacity: 0;
+  transform: scale(.72);
+  transform-origin: 50% 50%;
+  animation: baia-intro-eyepatch-in 9s linear both;
+}
+
+.app-intro-wordmark {
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  top: 53.05%;
+  width: min(54.4vw, 96.7vh);
+  height: auto;
+  max-width: none;
+  opacity: 0;
+  transform: translate(-50%, 10px) scale(.985);
+  transform-origin: 50% 0;
+  animation: baia-intro-wordmark-in 9s linear both;
+  will-change: opacity, transform;
+}
+
+@keyframes baia-intro-ring-in {
+  0%, 5.5% { opacity: 0; }
+  7.8% { opacity: .58; }
+  10% { opacity: 1; }
+  100% { opacity: 1; }
+}
+
+@keyframes baia-intro-boar-open {
+  0%, 9.5% {
+    opacity: 0;
+    visibility: visible;
+  }
+  11.1% {
+    opacity: .34;
+    visibility: visible;
+  }
+  13%, 23.99% {
+    opacity: 1;
+    visibility: visible;
+  }
+  24%, 100% {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+/*
+  Cambio occhiolino volutamente DISCRETO.
+  Prima le due sagome venivano cross-fadate: a metà transizione entrambe erano
+  semitrasparenti, producendo un breve "flash" del cinghiale.
+  Ora il frame wink sostituisce open nello stesso istante, senza interpolazione.
+*/
+@keyframes baia-intro-boar-wink {
+  0%, 23.99% {
+    opacity: 0;
+    visibility: hidden;
+  }
+  24%, 100% {
+    opacity: 1;
+    visibility: visible;
+  }
+}
+
+@keyframes baia-intro-eyepatch-in {
+  0%, 34.3% { opacity: 0; transform: scale(.72); }
+  35.7% { opacity: 1; transform: scale(1.025); }
+  37% { opacity: 1; transform: scale(1); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes baia-intro-emblem-motion {
+  0%, 42.2% {
+    transform: translate(-50%, -50%) scale(1);
+  }
+  50%, 60% {
+    transform: translate(-50%, -50%) scale(.74);
+  }
+  67.8%, 100% {
+    transform: translate(-50%, calc(-50% - 20.55vh)) scale(.74);
+  }
+}
+
+@keyframes baia-intro-wordmark-in {
+  0%, 61.5% {
+    opacity: 0;
+    transform: translate(-50%, 10px) scale(.985);
+  }
+  67.8%, 100% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+
+@media (orientation: portrait) {
+  .app-intro-wordmark {
+    width: min(88vw, 62vh);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-intro-emblem {
+    width: 46.3vmin;
+    animation: none;
+    transform: translate(-50%, calc(-50% - 20.55vh)) scale(.74);
+  }
+
+  .app-intro-ring,
+  .app-intro-boar-wink,
+  .app-intro-eyepatch,
+  .app-intro-wordmark {
+    animation: none;
+    opacity: 1;
+  }
+
+  .app-intro-boar-open {
+    display: none;
+    animation: none;
+  }
+
+  .app-intro-eyepatch {
+    transform: scale(1);
+  }
+
+  .app-intro-wordmark {
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+/* === /BAIA NATIVE APP INTRO V1 === */

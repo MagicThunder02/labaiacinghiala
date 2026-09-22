@@ -98,7 +98,139 @@ const elements = {
   musicMiniVolume: document.querySelector('#musicMiniVolume'),
   musicPlayerStatus: document.querySelector('#musicPlayerStatus'),
   musicAudio: document.querySelector('#musicAudio'),
+  appIntro: document.querySelector('#appIntro'),
+  appIntroAudio: document.querySelector('#appIntroAudio'),
 };
+
+const APP_INTRO_DURATION_MS = 9000;
+const APP_INTRO_REDUCED_MOTION_MS = 1200;
+const APP_INTRO_FAILSAFE_MS = 15000;
+const appIntroState = {
+  active: Boolean(document.documentElement.classList.contains('baia-native-app') && elements.appIntro),
+  animationDone: false,
+  contentReady: false,
+  dismissed: false,
+  targetPageId: '',
+  animationTimer: 0,
+  failsafeTimer: 0,
+};
+
+
+function stopAppIntroAudio({ reset = false } = {}) {
+  const audio = elements.appIntroAudio;
+  if (!audio) return;
+  try {
+    audio.pause();
+    if (reset) audio.currentTime = 0;
+  } catch {}
+}
+
+function syncAndPlayAppIntroAudio(startedAt, duration) {
+  const audio = elements.appIntroAudio;
+  if (!audio || duration !== APP_INTRO_DURATION_MS) return;
+
+  audio.volume = 0.82;
+
+  const playSynced = () => {
+    if (!appIntroState.active || appIntroState.dismissed) return;
+    const elapsedSeconds = Math.max(0, Math.min(
+      APP_INTRO_DURATION_MS / 1000,
+      (performance.now() - startedAt) / 1000,
+    ));
+
+    try {
+      if (Math.abs((audio.currentTime || 0) - elapsedSeconds) > 0.18) {
+        audio.currentTime = elapsedSeconds;
+      }
+    } catch {}
+
+    const attempt = audio.play();
+    if (attempt?.catch) {
+      attempt.catch(() => {
+        // Alcune WebView mobili possono richiedere una prima interazione.
+        // In quel caso riprova mantenendo la sincronizzazione visiva.
+        const resume = () => {
+          window.removeEventListener('pointerdown', resume, true);
+          window.removeEventListener('keydown', resume, true);
+          if (!appIntroState.active || appIntroState.dismissed) return;
+          const nowSeconds = Math.max(0, Math.min(
+            APP_INTRO_DURATION_MS / 1000,
+            (performance.now() - startedAt) / 1000,
+          ));
+          try { audio.currentTime = nowSeconds; } catch {}
+          audio.play().catch(() => {});
+        };
+        window.addEventListener('pointerdown', resume, { capture: true, once: true });
+        window.addEventListener('keydown', resume, { capture: true, once: true });
+      });
+    }
+  };
+
+  if (audio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+    playSynced();
+  } else {
+    audio.addEventListener('canplay', playSynced, { once: true });
+    audio.load();
+  }
+}
+
+function maybeDismissAppIntro() {
+  if (!appIntroState.active || appIntroState.dismissed) return;
+  if (!appIntroState.animationDone || !appIntroState.contentReady) return;
+
+  appIntroState.dismissed = true;
+  window.clearTimeout(appIntroState.animationTimer);
+  window.clearTimeout(appIntroState.failsafeTimer);
+  elements.appIntro.classList.add('is-exiting');
+  stopAppIntroAudio();
+  window.setTimeout(() => {
+    elements.appIntro.hidden = true;
+    document.documentElement.classList.remove('baia-native-app');
+  }, 340);
+}
+
+function markAppIntroContentReady(pageId = '') {
+  if (!appIntroState.active || appIntroState.dismissed) return;
+  if (pageId && appIntroState.targetPageId && pageId !== appIntroState.targetPageId) return;
+  appIntroState.contentReady = true;
+  maybeDismissAppIntro();
+}
+
+function setAppIntroTarget(pageId) {
+  if (!appIntroState.active || appIntroState.targetPageId) return;
+  appIntroState.targetPageId = pageId;
+}
+
+function hydrateAppIntroAssets() {
+  if (!appIntroState.active) return;
+  elements.appIntro.querySelectorAll('img[data-src]').forEach((image) => {
+    image.src = image.dataset.src;
+    image.removeAttribute('data-src');
+  });
+}
+
+function startAppIntroController() {
+  if (!appIntroState.active) return;
+  hydrateAppIntroAssets();
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const duration = reduceMotion ? APP_INTRO_REDUCED_MOTION_MS : APP_INTRO_DURATION_MS;
+  const startedAt = Number(window.__BAIA_INTRO_STARTED_AT__) || performance.now();
+  const remaining = Math.max(0, duration - (performance.now() - startedAt));
+
+  if (!reduceMotion) syncAndPlayAppIntroAudio(startedAt, duration);
+  else stopAppIntroAudio({ reset: true });
+
+  appIntroState.animationTimer = window.setTimeout(() => {
+    appIntroState.animationDone = true;
+    maybeDismissAppIntro();
+  }, remaining);
+
+  appIntroState.failsafeTimer = window.setTimeout(() => {
+    appIntroState.animationDone = true;
+    appIntroState.contentReady = true;
+    maybeDismissAppIntro();
+  }, APP_INTRO_FAILSAFE_MS);
+}
 
 
 function usesTouchLayout() {
@@ -1251,6 +1383,7 @@ function openPage(pageId, { allowUnauthenticated = false, silent = false } = {})
     previousFrame.contentWindow.postMessage({ type: 'shell-page-visibility', active: false }, window.location.origin);
   }
   const frame = frameFor(page);
+  setAppIntroTarget(page.id);
   elements.loadingState.hidden = true;
   document.querySelectorAll('.page-frame').forEach((item) => {
     item.classList.toggle('active', item === frame);
@@ -1262,7 +1395,10 @@ function openPage(pageId, { allowUnauthenticated = false, silent = false } = {})
     elements.shellContextBack.setAttribute('aria-label', 'Indietro');
   }
   applyMusicPagePolicy(pageId);
-  const notifyActive = () => frame.contentWindow?.postMessage({ type: 'shell-page-visibility', active: true }, window.location.origin);
+  const notifyActive = () => {
+    frame.contentWindow?.postMessage({ type: 'shell-page-visibility', active: true }, window.location.origin);
+    if (page.id !== 'films') markAppIntroContentReady(page.id);
+  };
   if (frame.contentDocument?.readyState === 'complete') notifyActive();
   else frame.addEventListener('load', notifyActive, { once: true });
   setActiveState(pageId);
@@ -1440,6 +1576,7 @@ function enterSignedOutState({ code = 'ACCOUNT_REQUIRED', message = '' } = {}) {
     code,
     message: code === 'ACCOUNT_REQUIRED' ? '' : accountFailureMessage(code, message),
   });
+  markAppIntroContentReady();
 }
 
 function enterDeviceSetupState({ code = '', message = '' } = {}) {
@@ -1453,6 +1590,7 @@ function enterDeviceSetupState({ code = '', message = '' } = {}) {
   elements.profileButton.disabled = true;
   elements.profileMenuButton.disabled = true;
   setAuthGateMode('device', { code, message: accountFailureMessage(code, message) });
+  markAppIntroContentReady();
 }
 
 async function refreshAccountState({ loading = true } = {}) {
@@ -1726,6 +1864,10 @@ document.addEventListener('keydown', (event) => {
 window.addEventListener('message', (event) => {
   if (event.origin !== window.location.origin) return;
   const data = event.data || {};
+  if (data.type === 'shell-page-ready') {
+    markAppIntroContentReady(String(data.pageId || ''));
+    return;
+  }
   if (data.type === 'shell-toast') showToast(data.message);
   if (data.type === 'shell-account-auth-required') {
     enterSignedOutState({ code: data.code, message: data.message });
@@ -1818,6 +1960,7 @@ window.setInterval(() => {
 // Stato iniziale fail-safe: nessun overlay può restare attivo durante il caricamento o il ripristino da cache.
 resetDrawerState();
 syncTouchShell();
+startAppIntroController();
 
 renderMenu();
 void bootstrapShell();
