@@ -3223,3 +3223,52 @@ html.baia-native-app .app-intro[hidden] {
   }
 }
 /* === /BAIA NATIVE APP INTRO V1 === */
+
+
+/* === BAIA PLAYBACK INTRO === */
+.playback-intro { display: none; }
+.playback-intro.is-active {
+  position: fixed;
+  z-index: 11000;
+  inset: 0;
+  display: block;
+  overflow: hidden;
+  pointer-events: auto;
+  user-select: none;
+  opacity: 1;
+  background:
+    radial-gradient(circle at 20% 15%, rgba(111, 145, 63, .28), transparent 36%),
+    radial-gradient(circle at 82% 78%, rgba(86, 109, 50, .22), transparent 34%),
+    #2f332d;
+  contain: layout paint;
+}
+.playback-intro[hidden] { display: none !important; }
+.playback-intro .app-intro-emblem,
+.playback-intro .app-intro-ring,
+.playback-intro .app-intro-boar-open,
+.playback-intro .app-intro-boar-wink,
+.playback-intro .app-intro-eyepatch,
+.playback-intro .app-intro-wordmark { animation: none; }
+.playback-intro.is-active .app-intro-emblem { animation: baia-intro-emblem-motion 9s linear both; }
+.playback-intro.is-active .app-intro-ring { animation: baia-intro-ring-in 9s linear both; }
+.playback-intro.is-active .app-intro-boar-open { animation: baia-intro-boar-open 9s linear both; }
+.playback-intro.is-active .app-intro-boar-wink { animation: baia-intro-boar-wink 9s linear both; }
+.playback-intro.is-active .app-intro-eyepatch { animation: baia-intro-eyepatch-in 9s linear both; }
+.playback-intro.is-active .app-intro-wordmark { animation: baia-intro-wordmark-in 9s linear both; }
+@media (prefers-reduced-motion: reduce) {
+  .playback-intro.is-active .app-intro-emblem,
+  .playback-intro.is-active .app-intro-ring,
+  .playback-intro.is-active .app-intro-boar-open,
+  .playback-intro.is-active .app-intro-boar-wink,
+  .playback-intro.is-active .app-intro-eyepatch,
+  .playback-intro.is-active .app-intro-wordmark { animation: none; }
+  .playback-intro.is-active .app-intro-emblem { transform: translate(-50%, calc(-50% - 20.55vh)) scale(.74); }
+  .playback-intro.is-active .app-intro-ring,
+  .playback-intro.is-active .app-intro-boar-wink,
+  .playback-intro.is-active .app-intro-eyepatch,
+  .playback-intro.is-active .app-intro-wordmark { opacity: 1; }
+  .playback-intro.is-active .app-intro-boar-open { display: none; }
+  .playback-intro.is-active .app-intro-eyepatch { transform: scale(1); }
+  .playback-intro.is-active .app-intro-wordmark { transform: translate(-50%, 0) scale(1); }
+}
+/* === /BAIA PLAYBACK INTRO === */

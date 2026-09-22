@@ -53,6 +53,21 @@ function shellMusicRequestState() {
   window.parent.postMessage({ type: 'shell-music-state-request' }, window.location.origin);
   return null;
 }
+function shellPlaybackIntro() {
+  if (window.parent === window) {
+    return Promise.resolve({ shown: false, cancelled: false, durationMs: 0 });
+  }
+
+  try {
+    const start = window.parent.BaiaShell?.playbackIntro;
+    if (typeof start === 'function') return Promise.resolve(start());
+  } catch (error) {
+    console.warn('Intro playback non disponibile.', error);
+  }
+
+  return Promise.resolve({ shown: false, cancelled: false, durationMs: 0 });
+}
+
 function shellAccountRefresh() {
   if (window.parent !== window) {
     window.parent.postMessage({ type: 'shell-account-refresh' }, window.location.origin);
@@ -163,6 +178,7 @@ window.BaiaPage = {
   shellMusicAddToQueue,
   shellMusicCommand,
   shellMusicRequestState,
+  shellPlaybackIntro,
   shellAccountRefresh,
   shellAccountSignedOut,
   shellShowAccountGate,

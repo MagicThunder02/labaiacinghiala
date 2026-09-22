@@ -15,6 +15,8 @@ const state = {
   searchTimer: null,
   paletteRequest: 0,
   playerReady: false,
+  playbackRequestId: 0,
+  playbackGateOpen: true,
   suppressProgressEvents: false,
   scrubbing: false,
   resumeAfterScrub: false,
@@ -320,6 +322,7 @@ function syncPlayerControlsVisibility() {
 }
 
 async function togglePlayback() {
+  if (!state.playbackGateOpen) return;
   if (elements.videoPlayer.paused || elements.videoPlayer.ended) {
     try { await elements.videoPlayer.play(); } catch (error) { console.error(error); }
   } else {
@@ -959,7 +962,43 @@ function saveProgressOnPageExit() {
 
 async function startPlayback(episode, { restart = false } = {}) {
   if (!episode) return;
-  if (state.activeEpisode && state.activeEpisode.id !== episode.id) await saveProgress(true);
+
+  const requestId = ++state.playbackRequestId;
+  state.playbackGateOpen = false;
+  const introPromise = Promise.resolve(window.BaiaPage.shellPlaybackIntro?.()).catch((error) => {
+    console.warn('Intro playback non disponibile.', error);
+    return { shown: false, cancelled: false, durationMs: 0 };
+  });
+
+  if (state.activeEpisode && state.activeEpisode.id !== episode.id) {
+    const previousProgressSave = Promise.resolve(saveProgress(true)).catch(() => {});
+    elements.videoPlayer.pause();
+    void previousProgressSave;
+  }
+
+  let introDone = false;
+  let metadataReady = false;
+  let playStarted = false;
+
+  const maybeStartVideo = async () => {
+    if (requestId !== state.playbackRequestId || !introDone || !metadataReady || playStarted) return;
+    playStarted = true;
+    try {
+      await elements.videoPlayer.play();
+    } catch (error) {
+      playStarted = false;
+      console.warn('Avvio automatico dell’episodio non riuscito.', error);
+    }
+    updatePlayPauseControl();
+  };
+
+  const introCompletion = introPromise.then(() => {
+    if (requestId !== state.playbackRequestId) return;
+    introDone = true;
+    state.playbackGateOpen = true;
+    return maybeStartVideo();
+  });
+
   state.activeEpisode = episode;
   resetProgressTracking(episode);
   state.playerReady = false;
@@ -987,21 +1026,43 @@ async function startPlayback(episode, { restart = false } = {}) {
   updateFullscreenControl();
   showPlayerControls({ restartTimer: false });
 
-  elements.videoPlayer.addEventListener('loadedmetadata', async () => {
+  elements.videoPlayer.addEventListener('loadedmetadata', () => {
+    if (requestId !== state.playbackRequestId) return;
     restorePlaybackPosition(restart);
     state.playerReady = true;
+    metadataReady = true;
     state.progressLastObservedSeconds = Number.isFinite(elements.videoPlayer.currentTime)
       ? elements.videoPlayer.currentTime
       : null;
     updatePlayerTimeline();
-    try { await elements.videoPlayer.play(); } catch {}
-    updatePlayPauseControl();
+    if (introDone) void maybeStartVideo();
   }, { once: true });
 
   elements.videoPlayer.pause();
-  elements.videoPlayer.src = await window.BaiaPage.mediaUrl(episode.streamUrl);
-  elements.videoPlayer.load();
-  state.suppressProgressEvents = false;
+  elements.videoPlayer.preload = 'auto';
+
+  let streamError = null;
+  try {
+    const streamUrl = await window.BaiaPage.mediaUrl(episode.streamUrl);
+    if (requestId !== state.playbackRequestId) return;
+    elements.videoPlayer.src = streamUrl;
+    elements.videoPlayer.load();
+    state.suppressProgressEvents = false;
+  } catch (error) {
+    streamError = error;
+    state.suppressProgressEvents = false;
+  }
+
+  await introCompletion;
+  if (requestId !== state.playbackRequestId) return;
+
+  if (streamError) {
+    state.playbackGateOpen = true;
+    setPlayerLoading(false);
+    throw streamError;
+  }
+
+  if (metadataReady) await maybeStartVideo();
 }
 
 async function saveProgress(force = false) {
@@ -1028,8 +1089,10 @@ async function saveProgress(force = false) {
         method: 'PUT',
         body: JSON.stringify({ seconds, durationSeconds }),
       });
-      state.progressLastSavedSeconds = payload.progress.seconds;
-      state.progressLastSavedDuration = payload.progress.durationSeconds;
+      if (state.activeEpisode?.id === episodeId) {
+        state.progressLastSavedSeconds = payload.progress.seconds;
+        state.progressLastSavedDuration = payload.progress.durationSeconds;
+      }
       const targetEpisode = state.activeSeries?.episodes?.find((item) => item.id === episodeId) || episode;
       targetEpisode.progressSeconds = payload.progress.seconds;
       targetEpisode.durationSeconds = payload.progress.durationSeconds;
@@ -1048,6 +1111,8 @@ async function saveProgress(force = false) {
 }
 
 async function closePlayer() {
+  state.playbackRequestId += 1;
+  state.playbackGateOpen = true;
   await saveProgress(true);
   loadHome().catch(handleError);
   if (isPlayerFullscreen()) {

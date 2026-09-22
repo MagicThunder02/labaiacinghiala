@@ -4,6 +4,7 @@ const STORAGE_PAGE = 'baiaCinghialaCurrentPage';
 const STORAGE_GROUPS = 'baiaCinghialaOpenGroups';
 const TOUCH_LAYOUT_QUERY = '(hover: none) and (pointer: coarse)';
 const touchLayoutMedia = window.matchMedia(TOUCH_LAYOUT_QUERY);
+const IS_NATIVE_APP = document.documentElement.classList.contains('baia-native-app');
 
 const menuDefinition = [
   { type: 'page', id: 'films', label: 'Film', icon: '/icons/film.svg', src: '/pages/films.html', section: 'films' },
@@ -100,13 +101,15 @@ const elements = {
   musicAudio: document.querySelector('#musicAudio'),
   appIntro: document.querySelector('#appIntro'),
   appIntroAudio: document.querySelector('#appIntroAudio'),
+  playbackIntro: document.querySelector('#playbackIntro'),
+  playbackIntroAudio: document.querySelector('#playbackIntroAudio'),
 };
 
 const APP_INTRO_DURATION_MS = 9000;
 const APP_INTRO_REDUCED_MOTION_MS = 1200;
 const APP_INTRO_FAILSAFE_MS = 15000;
 const appIntroState = {
-  active: Boolean(document.documentElement.classList.contains('baia-native-app') && elements.appIntro),
+  active: Boolean(IS_NATIVE_APP && elements.appIntro),
   animationDone: false,
   contentReady: false,
   dismissed: false,
@@ -232,6 +235,74 @@ function startAppIntroController() {
   }, APP_INTRO_FAILSAFE_MS);
 }
 
+
+
+const PLAYBACK_INTRO_DURATION_MS = 9000;
+const playbackIntroState = { runId: 0, timer: 0, resolve: null };
+
+function stopPlaybackIntroAudio({ reset = false } = {}) {
+  const audio = elements.playbackIntroAudio;
+  if (!audio) return;
+  try {
+    audio.pause();
+    if (reset) audio.currentTime = 0;
+  } catch {}
+}
+
+function finishPlaybackIntro(runId, { cancelled = false } = {}) {
+  if (runId !== playbackIntroState.runId) return;
+
+  window.clearTimeout(playbackIntroState.timer);
+  playbackIntroState.timer = 0;
+  const resolve = playbackIntroState.resolve;
+  playbackIntroState.resolve = null;
+
+  stopPlaybackIntroAudio({ reset: true });
+  if (elements.playbackIntro) {
+    elements.playbackIntro.classList.remove('is-active');
+    elements.playbackIntro.hidden = true;
+  }
+
+  resolve?.({ shown: true, cancelled, durationMs: PLAYBACK_INTRO_DURATION_MS });
+}
+
+function startPlaybackIntro() {
+  if (!IS_NATIVE_APP || !elements.playbackIntro) {
+    return Promise.resolve({ shown: false, cancelled: false, durationMs: 0 });
+  }
+
+  if (playbackIntroState.resolve) {
+    const previousResolve = playbackIntroState.resolve;
+    playbackIntroState.resolve = null;
+    window.clearTimeout(playbackIntroState.timer);
+    playbackIntroState.timer = 0;
+    previousResolve({ shown: true, cancelled: true, durationMs: PLAYBACK_INTRO_DURATION_MS });
+  }
+
+  const runId = ++playbackIntroState.runId;
+  stopPlaybackIntroAudio({ reset: true });
+
+  elements.playbackIntro.classList.remove('is-active');
+  elements.playbackIntro.hidden = false;
+  void elements.playbackIntro.offsetWidth;
+  elements.playbackIntro.classList.add('is-active');
+
+  const audio = elements.playbackIntroAudio;
+  if (audio) {
+    audio.volume = 0.82;
+    try { audio.currentTime = 0; } catch {}
+    const attempt = audio.play();
+    if (attempt?.catch) attempt.catch(() => {});
+  }
+
+  return new Promise((resolve) => {
+    playbackIntroState.resolve = resolve;
+    playbackIntroState.timer = window.setTimeout(
+      () => finishPlaybackIntro(runId),
+      PLAYBACK_INTRO_DURATION_MS,
+    );
+  });
+}
 
 function usesTouchLayout() {
   return touchLayoutMedia.matches;
@@ -1977,4 +2048,5 @@ window.BaiaShell = Object.freeze({
   musicPlayQueue,
   musicCommand,
   musicState: currentMusicSnapshot,
+  playbackIntro: startPlaybackIntro,
 });
