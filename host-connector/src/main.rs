@@ -3,12 +3,15 @@ mod relay_transport;
 mod server_identity;
 mod tls;
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use reqwest::{blocking::{Body, Client}, redirect::Policy, Method};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
-    io::{self, BufRead, BufReader, ErrorKind, Read, Write},
+    io::{self, BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom, Write},
     env,
+    fs::{self, File},
+    path::{Component, Path, PathBuf},
     net::{IpAddr, Ipv4Addr, SocketAddrV4, TcpListener, TcpStream},
     sync::{Arc, Mutex},
     thread,
@@ -44,6 +47,12 @@ const MAX_MEDIA_FRAME_BYTES: usize = 64 * 1024;
 const MAX_PAIRING_FRAME_BYTES: usize = 32 * 1024;
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(8);
 const HTTP_HEAD_TIMEOUT: Duration = Duration::from_secs(12);
+const KEEP_ALIVE_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_REQUESTS_PER_CONNECTION: usize = 200;
+const DIRECT_MEDIA_DATA_PLANE_ENV: &str = "BAIA_DIRECT_MEDIA_DATA_PLANE";
+const LIBRARY_PATH_ENV: &str = "LIBRARY_PATH";
+const INTERNAL_MEDIA_RESOLVE_HEADER: &str = "X-Baia-Internal-Media-Resolve";
+const INTERNAL_MEDIA_DESCRIPTOR_HEADER: &str = "x-baia-internal-media-descriptor";
 const CLIENT_READ_TIMEOUT: Duration = Duration::from_secs(130);
 const CLIENT_WRITE_TIMEOUT: Duration = Duration::from_secs(130);
 const MAX_ACTIVE_CONNECTIONS: usize = 128;
@@ -286,6 +295,24 @@ struct MediaAuthorization {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct InternalMediaDescriptor {
+    relative_path: String,
+    size: u64,
+    mime_type: String,
+    file_name: String,
+    last_modified: String,
+    etag: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ByteRange {
+    start: u64,
+    end: u64,
+    length: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ConnectorPairingRequest {
     protocol_version: u16,
     request_id: String,
@@ -493,55 +520,83 @@ fn handle_connection(
     clients: &ConnectorClients,
     server_identity: &server_identity::ServerIdentity,
 ) -> Result<(), String> {
+    let connection_id = Uuid::new_v4();
     let mut reader = BufReader::new(stream.clone());
-    let head = read_http_head(&mut reader)?;
-    let request_line = head
-        .first()
-        .ok_or_else(|| "Richiesta HTTP vuota.".to_string())?;
-    let (method, target) = parse_request_line(request_line)?;
-    let headers = parse_http_headers(&head[1..])?;
-    stream
-        .set_read_timeout(Some(CLIENT_READ_TIMEOUT))
-        .map_err(|error| format!("Impossibile impostare timeout body Connector: {error}"))?;
 
-    match (method.as_str(), target.as_str()) {
-        ("GET", HEALTH_PATH) => write_health(&mut stream),
-        ("POST", REQUEST_PATH) => {
-            let Some(body) = read_json_frame(&mut stream, &mut reader, &headers, MAX_FRAME_BYTES)? else {
+    for request_index in 1..=MAX_REQUESTS_PER_CONNECTION {
+        stream
+            .set_read_timeout(Some(if request_index == 1 { HTTP_HEAD_TIMEOUT } else { KEEP_ALIVE_IDLE_TIMEOUT }))
+            .map_err(|error| format!("Impossibile impostare timeout header Connector: {error}"))?;
+        let head = match read_http_head(&mut reader) {
+            Ok(head) => head,
+            Err(error) if request_index > 1 && (error.contains("timeout") || error.contains("timed out") || error.contains("WouldBlock")) => {
+                println!("connector_connection_id={} idle_timeout=true requests={}", connection_id, request_index - 1);
                 return Ok(());
-            };
-            handle_protocol_request(&mut stream, &clients.api, &body, server_identity)
+            }
+            Err(error) => return Err(error),
+        };
+        let request_line = head
+            .first()
+            .ok_or_else(|| "Richiesta HTTP vuota.".to_string())?;
+        let (method, target) = parse_request_line(request_line)?;
+        let headers = parse_http_headers(&head[1..])?;
+        let client_requested_close = request_line.ends_with("HTTP/1.0")
+            || headers.get("connection").is_some_and(|value| value.eq_ignore_ascii_case("close"));
+        println!(
+            "connector_connection_id={} request_index_on_connection={} transport_reused={} route={}",
+            connection_id,
+            request_index,
+            request_index > 1,
+            target
+        );
+        stream
+            .set_read_timeout(Some(CLIENT_READ_TIMEOUT))
+            .map_err(|error| format!("Impossibile impostare timeout body Connector: {error}"))?;
+
+        match (method.as_str(), target.as_str()) {
+            ("POST", MEDIA_PATH) => {
+                let Some(body) = read_json_frame(&mut stream, &mut reader, &headers, MAX_MEDIA_FRAME_BYTES)? else {
+                    return Ok(());
+                };
+                let keep_alive = !client_requested_close && request_index < MAX_REQUESTS_PER_CONNECTION;
+                handle_media_request(&mut stream, &clients.media, &body, server_identity, keep_alive)?;
+                if !keep_alive {
+                    return Ok(());
+                }
+            }
+            ("GET", HEALTH_PATH) => return write_health(&mut stream),
+            ("POST", REQUEST_PATH) => {
+                let Some(body) = read_json_frame(&mut stream, &mut reader, &headers, MAX_FRAME_BYTES)? else {
+                    return Ok(());
+                };
+                return handle_protocol_request(&mut stream, &clients.api, &body, server_identity);
+            }
+            ("POST", PAIRING_PATH) => {
+                let Some(body) = read_json_frame(&mut stream, &mut reader, &headers, MAX_PAIRING_FRAME_BYTES)? else {
+                    return Ok(());
+                };
+                return handle_pairing_request(&mut stream, &clients.api, &body, server_identity);
+            }
+            ("POST", UPLOAD_PATH) => {
+                return handle_upload_request(&mut stream, &clients.upload, reader, &headers, server_identity);
+            }
+            ("GET", _) | ("POST", _) => return write_connector_error(
+                &mut stream,
+                404,
+                None,
+                "CONNECTOR_ROUTE_NOT_FOUND",
+                "Route Host Connector non disponibile.",
+            ),
+            _ => return write_connector_error(
+                &mut stream,
+                405,
+                None,
+                "CONNECTOR_METHOD_NOT_ALLOWED",
+                "Metodo Host Connector non consentito.",
+            ),
         }
-        ("POST", MEDIA_PATH) => {
-            let Some(body) = read_json_frame(&mut stream, &mut reader, &headers, MAX_MEDIA_FRAME_BYTES)? else {
-                return Ok(());
-            };
-            handle_media_request(&mut stream, &clients.media, &body, server_identity)
-        }
-        ("POST", PAIRING_PATH) => {
-            let Some(body) = read_json_frame(&mut stream, &mut reader, &headers, MAX_PAIRING_FRAME_BYTES)? else {
-                return Ok(());
-            };
-            handle_pairing_request(&mut stream, &clients.api, &body, server_identity)
-        }
-        ("POST", UPLOAD_PATH) => {
-            handle_upload_request(&mut stream, &clients.upload, reader, &headers, server_identity)
-        }
-        ("GET", _) | ("POST", _) => write_connector_error(
-            &mut stream,
-            404,
-            None,
-            "CONNECTOR_ROUTE_NOT_FOUND",
-            "Route Host Connector non disponibile.",
-        ),
-        _ => write_connector_error(
-            &mut stream,
-            405,
-            None,
-            "CONNECTOR_METHOD_NOT_ALLOWED",
-            "Metodo Host Connector non consentito.",
-        ),
     }
+    Ok(())
 }
 
 fn read_json_frame<R: Read>(
@@ -1211,6 +1266,7 @@ fn handle_media_request(
     client: &Client,
     body: &[u8],
     server_identity: &server_identity::ServerIdentity,
+    keep_alive: bool,
 ) -> Result<(), String> {
     let parsed: ConnectorMediaRequest = match serde_json::from_slice(body) {
         Ok(value) => value,
@@ -1266,11 +1322,16 @@ fn handle_media_request(
         );
     }
 
-    let target = build_media_upstream_target(&validated.path, &validated.device_auth)?;
     let method = validated
         .method
         .parse::<Method>()
         .map_err(|_| "Metodo media upstream non valido dopo validazione.".to_string())?;
+
+    if direct_media_data_plane_enabled() && is_direct_video_path(&validated.path) {
+        return handle_direct_media_request(stream, client, &validated, method, keep_alive, &request_id, started);
+    }
+
+    let target = build_media_upstream_target(&validated.path, &validated.device_auth)?;
 
     let mut upstream = client.request(method.clone(), target);
     if let Some(value) = validated.range {
@@ -1316,7 +1377,240 @@ fn handle_media_request(
         started.elapsed().as_millis()
     );
 
-    write_media_response(stream, &mut response, method == Method::HEAD)
+    write_media_response(stream, &mut response, method == Method::HEAD, keep_alive)
+}
+
+fn direct_media_data_plane_enabled() -> bool {
+    env::var(DIRECT_MEDIA_DATA_PLANE_ENV)
+        .ok()
+        .is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+}
+
+fn is_direct_video_path(path: &str) -> bool {
+    let segments: Vec<_> = path.trim_matches('/').split('/').collect();
+    matches!(segments.as_slice(), ["api", "movies", id, "stream"] if !id.is_empty() && id.chars().all(|ch| ch.is_ascii_digit()))
+}
+
+fn parse_single_byte_range(value: Option<&str>, file_size: u64) -> Result<Option<ByteRange>, ()> {
+    let Some(value) = value else { return Ok(None); };
+    let value = value.trim();
+    let spec = value.strip_prefix("bytes=").ok_or(())?;
+    if spec.contains(',') { return Err(()); }
+    let (start_text, end_text) = spec.split_once('-').ok_or(())?;
+    if start_text.is_empty() && end_text.is_empty() { return Err(()); }
+
+    let (start, mut end) = if start_text.is_empty() {
+        let suffix = end_text.parse::<u64>().map_err(|_| ())?;
+        if suffix == 0 || file_size == 0 { return Err(()); }
+        (file_size.saturating_sub(suffix), file_size - 1)
+    } else {
+        let start = start_text.parse::<u64>().map_err(|_| ())?;
+        let end = if end_text.is_empty() {
+            file_size.checked_sub(1).ok_or(())?
+        } else {
+            end_text.parse::<u64>().map_err(|_| ())?
+        };
+        (start, end)
+    };
+    if start >= file_size || end < start { return Err(()); }
+    end = end.min(file_size - 1);
+    Ok(Some(ByteRange { start, end, length: end - start + 1 }))
+}
+
+fn validate_internal_relative_path(value: &str) -> Result<PathBuf, String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.starts_with('/')
+        || value.starts_with("//")
+        || value.contains('\\')
+        || value.contains('\0')
+        || value.contains("://")
+        || value.contains(':')
+    {
+        return Err("Descrittore media contiene un percorso relativo non valido.".to_string());
+    }
+    let mut path = PathBuf::new();
+    for segment in value.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return Err("Descrittore media contiene segmenti di percorso non validi.".to_string());
+        }
+        path.push(segment);
+    }
+    if path.components().any(|component| !matches!(component, Component::Normal(_))) {
+        return Err("Descrittore media contiene componenti filesystem non consentiti.".to_string());
+    }
+    Ok(path)
+}
+
+fn resolve_direct_media_file(relative_path: &str) -> Result<(File, u64), String> {
+    let configured_root = env::var(LIBRARY_PATH_ENV)
+        .map_err(|_| format!("{LIBRARY_PATH_ENV} richiesto per il direct media data plane."))?;
+    let root = fs::canonicalize(configured_root.trim())
+        .map_err(|error| format!("Radice libreria non accessibile dal Connector: {error}"))?;
+    let relative = validate_internal_relative_path(relative_path)?;
+    let candidate = root.join(relative);
+    let canonical = fs::canonicalize(&candidate)
+        .map_err(|error| format!("File media autorizzato non accessibile: {error}"))?;
+    if !canonical.starts_with(&root) {
+        return Err("File media autorizzato risolve fuori dalla libreria.".to_string());
+    }
+    let metadata = fs::metadata(&canonical)
+        .map_err(|error| format!("Metadata file media non leggibili: {error}"))?;
+    if !metadata.is_file() {
+        return Err("La risorsa media autorizzata non è un file regolare.".to_string());
+    }
+    let file = File::open(&canonical)
+        .map_err(|error| format!("File media autorizzato non apribile in lettura: {error}"))?;
+    Ok((file, metadata.len()))
+}
+
+fn decode_internal_media_descriptor(response: &reqwest::blocking::Response) -> Result<InternalMediaDescriptor, String> {
+    let encoded = response
+        .headers()
+        .get(INTERNAL_MEDIA_DESCRIPTOR_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| "Node non ha restituito il descrittore media interno.".to_string())?;
+    if encoded.len() > 16 * 1024 {
+        return Err("Descrittore media interno troppo grande.".to_string());
+    }
+    let bytes = URL_SAFE_NO_PAD.decode(encoded)
+        .map_err(|_| "Descrittore media interno non decodificabile.".to_string())?;
+    let descriptor = serde_json::from_slice::<InternalMediaDescriptor>(&bytes)
+        .map_err(|_| "Descrittore media interno non valido.".to_string())?;
+    if descriptor.relative_path.len() > 4096
+        || descriptor.file_name.is_empty()
+        || descriptor.file_name.len() > 1024
+        || !valid_internal_header_value(&descriptor.mime_type, 255)
+        || !valid_internal_header_value(&descriptor.last_modified, 512)
+        || !valid_internal_header_value(&descriptor.etag, 512)
+    {
+        return Err("Descrittore media interno contiene campi non validi.".to_string());
+    }
+    Ok(descriptor)
+}
+
+fn valid_internal_header_value(value: &str, max_len: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max_len
+        && !value.contains('\r')
+        && !value.contains('\n')
+        && !value.chars().any(|ch| ch.is_control())
+}
+
+fn write_direct_media_headers(
+    stream: &mut SharedTlsStream,
+    status: u16,
+    descriptor: &InternalMediaDescriptor,
+    content_length: u64,
+    content_range: Option<&str>,
+    keep_alive: bool,
+) -> Result<(), String> {
+    write!(stream, "HTTP/1.1 {} {}\r\n", status, reason_phrase(status))
+        .map_err(|error| format!("Impossibile scrivere status direct media: {error}"))?;
+    write!(stream, "Content-Type: {}\r\n", descriptor.mime_type)
+        .map_err(|error| format!("Impossibile scrivere Content-Type direct media: {error}"))?;
+    write!(stream, "Content-Length: {}\r\nAccept-Ranges: bytes\r\n", content_length)
+        .map_err(|error| format!("Impossibile scrivere framing direct media: {error}"))?;
+    if let Some(content_range) = content_range {
+        write!(stream, "Content-Range: {}\r\n", content_range)
+            .map_err(|error| format!("Impossibile scrivere Content-Range direct media: {error}"))?;
+    }
+    write!(stream, "Content-Disposition: inline; filename*=UTF-8''{}\r\n", url::form_urlencoded::byte_serialize(descriptor.file_name.as_bytes()).collect::<String>())
+        .map_err(|error| format!("Impossibile scrivere Content-Disposition direct media: {error}"))?;
+    write!(stream, "Cache-Control: private, max-age=0, must-revalidate\r\nETag: {}\r\nLast-Modified: {}\r\nConnection: {}\r\n\r\n",
+        descriptor.etag, descriptor.last_modified, if keep_alive { "keep-alive" } else { "close" })
+        .map_err(|error| format!("Impossibile finalizzare header direct media: {error}"))?;
+    Ok(())
+}
+
+fn handle_direct_media_request(
+    stream: &mut SharedTlsStream,
+    client: &Client,
+    validated: &ConnectorMediaRequest,
+    method: Method,
+    keep_alive: bool,
+    request_id: &str,
+    started: Instant,
+) -> Result<(), String> {
+    let target = build_media_upstream_target(&validated.path, &validated.device_auth)?;
+    let mut control = match client
+        .head(target)
+        .header(INTERNAL_MEDIA_RESOLVE_HEADER, "1")
+        .send()
+    {
+        Ok(response) => response,
+        Err(_) => return write_connector_error(
+            stream, 502, Some(request_id), "HOST_CONNECTOR_MEDIA_UPSTREAM_UNAVAILABLE",
+            "Node Baia su loopback non è raggiungibile per autorizzare il media.",
+        ),
+    };
+    if control.status().is_redirection() {
+        return write_connector_error(stream, 502, Some(request_id), "HOST_CONNECTOR_MEDIA_REDIRECT", "Node Baia ha restituito un redirect media non consentito.");
+    }
+    if !control.status().is_success() {
+        println!("media={} media_source=direct_file authorization_status={} elapsed_ms={}", request_id, control.status().as_u16(), started.elapsed().as_millis());
+        return write_media_response(stream, &mut control, true, keep_alive);
+    }
+
+    let descriptor = match decode_internal_media_descriptor(&control) {
+        Ok(value) => value,
+        Err(error) => return write_connector_error(stream, 502, Some(request_id), "HOST_CONNECTOR_MEDIA_DESCRIPTOR_INVALID", &error),
+    };
+    let (mut file, actual_size) = match resolve_direct_media_file(&descriptor.relative_path) {
+        Ok(value) => value,
+        Err(error) => return write_connector_error(stream, 502, Some(request_id), "HOST_CONNECTOR_MEDIA_FILE_INVALID", &error),
+    };
+    if actual_size != descriptor.size {
+        return write_connector_error(stream, 502, Some(request_id), "HOST_CONNECTOR_MEDIA_FILE_CHANGED", "Il file media è cambiato dopo l'autorizzazione Node.");
+    }
+
+    let range_allowed = match validated.if_range.as_deref() {
+        None => true,
+        Some(value) => value == descriptor.etag || value == descriptor.last_modified,
+    };
+    let range = if range_allowed {
+        match parse_single_byte_range(validated.range.as_deref(), descriptor.size) {
+            Ok(value) => value,
+            Err(()) => {
+                write!(stream, "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{}\r\nContent-Length: 0\r\nAccept-Ranges: bytes\r\nConnection: {}\r\n\r\n", descriptor.size, if keep_alive { "keep-alive" } else { "close" })
+                    .map_err(|error| format!("Impossibile scrivere 416 direct media: {error}"))?;
+                stream.flush().ok();
+                return Ok(());
+            }
+        }
+    } else {
+        None
+    };
+
+    let (status, content_length, content_range) = if let Some(range) = range {
+        file.seek(SeekFrom::Start(range.start))
+            .map_err(|error| format!("Seek direct media non riuscito: {error}"))?;
+        (206, range.length, Some(format!("bytes {}-{}/{}", range.start, range.end, descriptor.size)))
+    } else {
+        (200, descriptor.size, None)
+    };
+    write_direct_media_headers(stream, status, &descriptor, content_length, content_range.as_deref(), keep_alive)?;
+
+    let mut bytes_streamed = 0u64;
+    if method != Method::HEAD {
+        let copy_result = if range.is_some() {
+            let mut limited = file.take(content_length);
+            std::io::copy(&mut limited, stream)
+        } else {
+            std::io::copy(&mut file, stream)
+        };
+        match copy_result {
+            Ok(bytes) => bytes_streamed = bytes,
+            Err(error) if is_client_disconnect(&error) => {}
+            Err(error) => return Err(format!("Streaming direct media interrotto: {error}")),
+        }
+    }
+    stream.flush().ok();
+    println!(
+        "media={} media_source=direct_file bytes_streamed={} status={} elapsed_ms={}",
+        request_id, bytes_streamed, status, started.elapsed().as_millis()
+    );
+    Ok(())
 }
 
 fn validate_media_request(mut request: ConnectorMediaRequest) -> Result<ConnectorMediaRequest, String> {
@@ -1452,6 +1746,7 @@ fn write_media_response(
     stream: &mut SharedTlsStream,
     response: &mut reqwest::blocking::Response,
     head_only: bool,
+    keep_alive: bool,
 ) -> Result<(), String> {
     let status = response.status();
     write!(
@@ -1468,7 +1763,7 @@ fn write_media_response(
                 .map_err(|error| format!("Impossibile scrivere header media Connector: {error}"))?;
         }
     }
-    write!(stream, "Connection: close\r\n\r\n")
+    write!(stream, "Connection: {}\r\n\r\n", if keep_alive { "keep-alive" } else { "close" })
         .map_err(|error| format!("Impossibile finalizzare header media Connector: {error}"))?;
 
     if !head_only {

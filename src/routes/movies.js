@@ -383,27 +383,92 @@ router.get('/:id/poster', async (req, res, next) => {
   }
 });
 
-router.get('/:id/stream', async (req, res, next) => {
+const INTERNAL_MEDIA_RESOLVE_HEADER = 'X-Baia-Internal-Media-Resolve';
+const INTERNAL_MEDIA_DESCRIPTOR_HEADER = 'X-Baia-Internal-Media-Descriptor';
+
+function mediaValidators(stats) {
+  const mtimeMs = Math.trunc(stats.mtimeMs);
+  return {
+    etag: `"${stats.size.toString(16)}-${mtimeMs.toString(16)}"`,
+    lastModified: stats.mtime.toUTCString(),
+  };
+}
+
+async function resolveMovieStream(req, res) {
   const movie = getRawMovie.get(req.params.id);
   if (!movie || Number(movie.available) !== 1) {
-    return res.status(404).json({ error: 'Contenuto non disponibile.' });
+    res.status(404).json({ error: 'Contenuto non disponibile.' });
+    return null;
   }
 
-  try {
-    const filePath = movieFilePath(movie);
-    const stats = await fsp.stat(filePath);
-    if (!stats.isFile()) return res.status(404).json({ error: 'File video non disponibile.' });
+  const filePath = movieFilePath(movie);
+  const stats = await fsp.stat(filePath);
+  if (!stats.isFile()) {
+    res.status(404).json({ error: 'File video non disponibile.' });
+    return null;
+  }
 
-    const range = parseByteRange(req.headers.range, stats.size);
-    const commonHeaders = {
+  const { etag, lastModified } = mediaValidators(stats);
+  return {
+    movie,
+    filePath,
+    stats,
+    etag,
+    lastModified,
+    commonHeaders: {
       'Accept-Ranges': 'bytes',
       'Content-Type': movie.mime_type || 'application/octet-stream',
       'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(movie.file_name)}`,
       'Cache-Control': 'private, max-age=0, must-revalidate',
-    };
+      'ETag': etag,
+      'Last-Modified': lastModified,
+    },
+  };
+}
+
+function internalMediaDescriptor(stream) {
+  const descriptor = {
+    relativePath: String(stream.movie.relative_path || ''),
+    size: stream.stats.size,
+    mimeType: stream.movie.mime_type || 'application/octet-stream',
+    fileName: stream.movie.file_name,
+    lastModified: stream.lastModified,
+    etag: stream.etag,
+  };
+  return Buffer.from(JSON.stringify(descriptor), 'utf8').toString('base64url');
+}
+
+router.head('/:id/stream', async (req, res, next) => {
+  try {
+    const stream = await resolveMovieStream(req, res);
+    if (!stream) return undefined;
+
+    res.set({
+      ...stream.commonHeaders,
+      'Content-Length': stream.stats.size,
+    });
+    // Node ascolta esclusivamente su loopback. Questo header è un segnale
+    // Connector->Node e il descrittore non viene mai inoltrato al client remoto.
+    if (req.get(INTERNAL_MEDIA_RESOLVE_HEADER) === '1') {
+      res.set(INTERNAL_MEDIA_DESCRIPTOR_HEADER, internalMediaDescriptor(stream));
+    }
+    return res.status(200).end();
+  } catch (error) {
+    if (error.code === 'ENOENT') return res.status(404).json({ error: 'File video non disponibile.' });
+    return next(error);
+  }
+});
+
+router.get('/:id/stream', async (req, res, next) => {
+  try {
+    const stream = await resolveMovieStream(req, res);
+    if (!stream) return undefined;
+
+    const { filePath, stats, commonHeaders } = stream;
+    const range = parseByteRange(req.headers.range, stats.size);
 
     if (range?.invalid) {
-      res.set('Content-Range', `bytes */${stats.size}`);
+      res.set({ ...commonHeaders, 'Content-Range': `bytes */${stats.size}` });
       return res.status(416).end();
     }
 

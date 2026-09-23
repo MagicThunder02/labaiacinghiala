@@ -78,10 +78,13 @@ test('TransportManager usa lo stesso canale Connector TLS anche in Direct Intern
   assert.match(core, /Direct Internet ha precedenza esplicita sul fallback relay/);
 });
 
-test('Host Connector espone health v1 senza accesso a SQLite o filesystem media', () => {
+test('Host Connector espone health v1 senza SQLite e limita il filesystem al direct media autorizzato', () => {
   assert.match(connector, /HEALTH_PATH: &str = "\/baia\/v1\/health"/);
   assert.match(connector, /node_reachable/);
-  assert.doesNotMatch(connector, /sqlite|media\.sqlite|LIBRARY_PATH|DATABASE_PATH/i);
+  assert.doesNotMatch(connector, /sqlite|media\.sqlite|DATABASE_PATH/i);
+  assert.match(connector, /LIBRARY_PATH_ENV: &str = "LIBRARY_PATH"/);
+  assert.match(connector, /validate_internal_relative_path/);
+  assert.match(connector, /canonical\.starts_with\(&root\)/);
 });
 
 
@@ -105,6 +108,31 @@ test('canale media Connector usa solo path logici allowlistati e conserva Range'
 });
 
 
+
+
+test('streaming media usa keep-alive bounded sul TLS e sul Media Bridge locale', () => {
+  assert.match(connector, /KEEP_ALIVE_IDLE_TIMEOUT: Duration = Duration::from_secs\(30\)/);
+  assert.match(connector, /MAX_REQUESTS_PER_CONNECTION: usize = 200/);
+  assert.match(connector, /for request_index in 1\.\.=MAX_REQUESTS_PER_CONNECTION/);
+  assert.match(connector, /request_index_on_connection/);
+  assert.match(connector, /Connection: \{\}/);
+  assert.match(mediaBridge, /KEEP_ALIVE_IDLE_TIMEOUT: Duration = Duration::from_secs\(30\)/);
+  assert.match(mediaBridge, /MAX_REQUESTS_PER_CONNECTION: usize = 200/);
+  assert.match(mediaBridge, /for request_index in 1\.\.=MAX_REQUESTS_PER_CONNECTION/);
+});
+
+test('direct media data plane mantiene Node nel control plane e valida il filesystem', () => {
+  assert.match(connector, /BAIA_DIRECT_MEDIA_DATA_PLANE/);
+  assert.match(connector, /INTERNAL_MEDIA_RESOLVE_HEADER/);
+  assert.match(connector, /\.head\(target\)/);
+  assert.match(connector, /decode_internal_media_descriptor/);
+  assert.match(connector, /File::open/);
+  assert.match(connector, /SeekFrom::Start/);
+  assert.match(connector, /file\.take\(content_length\)/);
+  assert.match(connector, /media_source=direct_file/);
+  assert.match(connector, /canonical\.starts_with\(&root\)/);
+  assert.doesNotMatch(mediaBridge, /Internal-Media-Descriptor/i);
+});
 test('Fase 4A.4 riscatta il pairing solo tramite il canale specifico del Connector configurato', () => {
   assert.match(connectorTls, /PAIRING_PATH: &str = "\/baia\/v1\/pairing"/);
   assert.match(pairing, /connector_url\(&connector_endpoint, connector_tls::PAIRING_PATH\)/);

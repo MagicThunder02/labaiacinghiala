@@ -13,3 +13,12 @@ test('interpreta un intervallo aperto', () => {
 test('rifiuta un intervallo oltre il file', () => {
   assert.deepEqual(parseByteRange('bytes=100-120', 100), { invalid: true });
 });
+
+
+test('interpreta un intervallo suffix', () => {
+  assert.deepEqual(parseByteRange('bytes=-10', 100), { start: 90, end: 99, length: 10 });
+});
+
+test('rifiuta i multi-range non supportati', () => {
+  assert.deepEqual(parseByteRange('bytes=0-1,4-5', 100), { invalid: true });
+});

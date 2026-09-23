@@ -101,3 +101,40 @@ Update firmati, rollback, migrazioni e compatibilità protocollo.
 - Reboot host recupera automaticamente.
 - Cambio IP gestito dal DDNS.
 - Amici installano soltanto Baia.
+
+## Ottimizzazione streaming video: keep-alive + direct media data plane
+
+Implementazione introdotta sul canale `/baia/v1/media`:
+
+- HTTP/1.1 persistente tra Tauri Media Bridge e Host Connector, con `KEEP_ALIVE_IDLE_TIMEOUT = 30s` e `MAX_REQUESTS_PER_CONNECTION = 200`;
+- keep-alive equivalente sul server HTTP loopback del Media Bridge;
+- log non sensibili `connector_connection_id`, `request_index_on_connection`, `transport_reused`, `media_source` e `bytes_streamed`;
+- `HEAD /api/movies/:id/stream` esplicito in Node per autorizzare e risolvere il file senza aprire `createReadStream`;
+- feature flag `BAIA_DIRECT_MEDIA_DATA_PLANE=true` per spostare il body video da Node al Connector;
+- `LIBRARY_PATH` è la source of truth condivisa: Node continua a essere l'autorità per device/account/section/content lookup, mentre il Connector usa la libreria solo dopo un descriptor emesso da Node;
+- il descriptor usa un path relativo, viene consumato dal Connector e non viene inoltrato al client;
+- il Connector rifiuta path assoluti, traversal, backslash, drive/URI, segmenti `.`/`..`, canonicalizza root e file e richiede che il file canonico rimanga sotto la root. Questo blocca anche symlink/junction che risolvono fuori libreria;
+- il Connector apre solo `File::open` e fa `seek` + `take` + `std::io::copy`, senza bufferizzare il Range intero in RAM;
+- Range singolo, suffix/open range, 416, `If-Range`, ETag e Last-Modified sono gestiti nel direct data plane;
+- poster, musica, reading e upload restano sul percorso storico.
+
+### Modello operativo e ACL
+
+Quando `BAIA_DIRECT_MEDIA_DATA_PLANE=true`, il processo Host Connector deve poter leggere `LIBRARY_PATH`. In produzione assegnargli ACL di sola lettura (`READ`), senza `WRITE`, `DELETE` o `CREATE`. Node mantiene i privilegi necessari alle funzioni di gestione/upload.
+
+### Data path
+
+Prima:
+
+```text
+file -> Node -> loopback HTTP -> Host Connector -> TLS -> Tauri Media Bridge -> WebView
+```
+
+Dopo, con direct data plane attivo:
+
+```text
+control: Host Connector -> HEAD Node -> auth/account/permission/lookup -> descriptor
+data:    file -> Host Connector -> TLS persistente -> Tauri Media Bridge -> WebView
+```
+
+La revoca resta immediata a granularità di richiesta: ogni nuova richiesta Range viene nuovamente autorizzata da Node. Non è stata introdotta una cache di autorizzazione lunga.

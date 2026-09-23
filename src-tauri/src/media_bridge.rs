@@ -25,6 +25,8 @@ const PROTOCOL_VERSION: u16 = 1;
 const MAX_REQUEST_LINE_BYTES: usize = 4096;
 const MAX_HEADER_LINE_BYTES: usize = 8192;
 const MAX_HEADER_COUNT: usize = 64;
+const KEEP_ALIVE_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_REQUESTS_PER_CONNECTION: usize = 200;
 const BRIDGE_HEADER: &str = "X-Baia-Media-Bridge";
 const BRIDGE_HEADER_VALUE: &str = "media-v1";
 // Tauri's webview origin differs by platform: Windows and Android serve the
@@ -241,108 +243,124 @@ fn handle_connection(
     mut stream: TcpStream,
     routes: &Arc<Mutex<HashMap<String, BridgeRoute>>>,
 ) -> Result<(), String> {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(15)));
     let read_stream = stream
         .try_clone()
         .map_err(|error| format!("Impossibile leggere la richiesta locale: {error}"))?;
     let mut reader = BufReader::new(read_stream);
 
-    let mut request_line = String::new();
-    read_limited_line(&mut reader, &mut request_line, MAX_REQUEST_LINE_BYTES)?;
-    let (method, target) = parse_request_line(&request_line)?;
-    let mut range = None;
-    let mut if_range = None;
-
-    for _ in 0..MAX_HEADER_COUNT {
-        let mut line = String::new();
-        read_limited_line(&mut reader, &mut line, MAX_HEADER_LINE_BYTES)?;
-        if line == "\r\n" || line == "\n" || line.is_empty() {
-            break;
+    for request_index in 1..=MAX_REQUESTS_PER_CONNECTION {
+        let _ = stream.set_read_timeout(Some(if request_index == 1 { Duration::from_secs(15) } else { KEEP_ALIVE_IDLE_TIMEOUT }));
+        let mut request_line = String::new();
+        if let Err(error) = read_limited_line(&mut reader, &mut request_line, MAX_REQUEST_LINE_BYTES) {
+            if request_index > 1 { return Ok(()); }
+            return Err(error);
         }
-        if let Some((name, value)) = line.split_once(':') {
-            let name = name.trim().to_ascii_lowercase();
-            let value = value.trim();
-            if value.contains('\r') || value.contains('\n') {
+        let (method, target) = parse_request_line(&request_line)?;
+        let http10 = request_line.trim_end().ends_with("HTTP/1.0");
+        let mut range = None;
+        let mut if_range = None;
+        let mut connection_close = http10;
+        let mut header_terminated = false;
+
+        for _ in 0..MAX_HEADER_COUNT {
+            let mut line = String::new();
+            read_limited_line(&mut reader, &mut line, MAX_HEADER_LINE_BYTES)?;
+            if line == "\r\n" || line == "\n" || line.is_empty() {
+                header_terminated = true;
+                break;
+            }
+            if let Some((name, value)) = line.split_once(':') {
+                let name = name.trim().to_ascii_lowercase();
+                let value = value.trim();
+                if value.contains('\r') || value.contains('\n') {
+                    return write_error(&mut stream, 400, "Bad Request");
+                }
+                match name.as_str() {
+                    "range" => range = Some(value.to_string()),
+                    "if-range" => if_range = Some(value.to_string()),
+                    "connection" if value.eq_ignore_ascii_case("close") => connection_close = true,
+                    _ => {}
+                }
+            } else {
                 return write_error(&mut stream, 400, "Bad Request");
             }
-            match name.as_str() {
-                "range" => range = Some(value.to_string()),
-                "if-range" => if_range = Some(value.to_string()),
-                _ => {}
-            }
         }
-    }
+        if !header_terminated {
+            return write_error(&mut stream, 400, "Bad Request");
+        }
 
-    if !matches!(method, Method::GET | Method::HEAD) {
-        return write_error(&mut stream, 405, "Method Not Allowed");
-    }
+        if !matches!(method, Method::GET | Method::HEAD) {
+            return write_error(&mut stream, 405, "Method Not Allowed");
+        }
 
-    let token = match bridge_token(target) {
-        Ok(token) => token,
-        Err(_) => return write_error(&mut stream, 404, "Not Found"),
-    };
-    let route = {
-        let now = unix_seconds();
-        let mut guard = routes
-            .lock()
-            .map_err(|_| "Registro ponte media non disponibile.".to_string())?;
-        guard.retain(|_, route| route.expires >= now);
-        guard.get(token).cloned()
-    };
-    let Some(route) = route else {
-        return write_error(&mut stream, 410, "Gone");
-    };
+        let token = match bridge_token(target) {
+            Ok(token) => token,
+            Err(_) => return write_error(&mut stream, 404, "Not Found"),
+        };
+        let route = {
+            let now = unix_seconds();
+            let mut guard = routes
+                .lock()
+                .map_err(|_| "Registro ponte media non disponibile.".to_string())?;
+            guard.retain(|_, route| route.expires >= now);
+            guard.get(token).cloned()
+        };
+        let Some(route) = route else {
+            return write_error(&mut stream, 410, "Gone");
+        };
 
-    let BridgeRoute {
-        path,
-        authorization,
-        access_grant,
-        connector_url,
-        connector_client,
-        ..
-    } = route;
-    let frame = ConnectorMediaRequest {
-        protocol_version: PROTOCOL_VERSION,
-        request_id: Uuid::new_v4().to_string(),
-        method: method.as_str().to_string(),
-        path,
-        range,
-        if_range,
-        access_grant,
-        device_auth: authorization,
-    };
+        let BridgeRoute {
+            path,
+            authorization,
+            access_grant,
+            connector_url,
+            connector_client,
+            ..
+        } = route;
+        let frame = ConnectorMediaRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: Uuid::new_v4().to_string(),
+            method: method.as_str().to_string(),
+            path,
+            range,
+            if_range,
+            access_grant,
+            device_auth: authorization,
+        };
 
-    let mut response = match connector_client
-        .post(&connector_url)
-        .header(reqwest::header::ACCEPT, "*/*")
-        .json(&frame)
-        .send()
-    {
-        Ok(response) => response,
-        Err(error) => {
-            eprintln!("Baia Host Connector media non raggiungibile: {error}");
+        let mut response = match connector_client
+            .post(&connector_url)
+            .header(reqwest::header::ACCEPT, "*/*")
+            .json(&frame)
+            .send()
+        {
+            Ok(response) => response,
+            Err(error) => {
+                eprintln!("Baia Host Connector media non raggiungibile: {error}");
+                return write_error(&mut stream, 502, "Bad Gateway");
+            }
+        };
+
+        if response.status().is_redirection() {
             return write_error(&mut stream, 502, "Bad Gateway");
         }
-    };
 
-    if response.status().is_redirection() {
-        return write_error(&mut stream, 502, "Bad Gateway");
-    }
-
-    if let Err(error) = write_status_and_headers(&mut stream, &response) {
-        if is_client_disconnect_message(&error) {
-            return Ok(());
+        let keep_alive = !connection_close && request_index < MAX_REQUESTS_PER_CONNECTION;
+        if let Err(error) = write_status_and_headers(&mut stream, &response, keep_alive) {
+            if is_client_disconnect_message(&error) { return Ok(()); }
+            return Err(error);
         }
-        return Err(error);
-    }
-    if method != Method::HEAD {
-        if let Err(error) = std::io::copy(&mut response, &mut stream) {
-            if !is_client_disconnect(&error) {
-                return Err(format!("Streaming dal ponte media interrotto: {error}"));
+        if method != Method::HEAD {
+            if let Err(error) = std::io::copy(&mut response, &mut stream) {
+                if !is_client_disconnect(&error) {
+                    return Err(format!("Streaming dal ponte media interrotto: {error}"));
+                }
+                return Ok(());
             }
         }
+        stream.flush().ok();
+        if !keep_alive { return Ok(()); }
     }
-    stream.flush().ok();
     Ok(())
 }
 
@@ -405,7 +423,7 @@ fn is_client_disconnect_message(message: &str) -> bool {
         || message.contains("connection aborted")
 }
 
-fn write_status_and_headers(stream: &mut TcpStream, response: &reqwest::blocking::Response) -> Result<(), String> {
+fn write_status_and_headers(stream: &mut TcpStream, response: &reqwest::blocking::Response, keep_alive: bool) -> Result<(), String> {
     let status = response.status();
     let reason = reason_phrase(status.as_u16());
     write!(stream, "HTTP/1.1 {} {}\r\n", status.as_u16(), reason)
@@ -429,11 +447,12 @@ fn write_status_and_headers(stream: &mut TcpStream, response: &reqwest::blocking
     }
     write!(
         stream,
-        "Access-Control-Allow-Origin: {}\r\nAccess-Control-Expose-Headers: {}\r\n{}: {}\r\nConnection: close\r\n\r\n",
+        "Access-Control-Allow-Origin: {}\r\nAccess-Control-Expose-Headers: {}\r\n{}: {}\r\nConnection: {}\r\n\r\n",
         BRIDGE_CORS_ORIGIN,
         BRIDGE_EXPOSE_HEADERS,
         BRIDGE_HEADER,
-        BRIDGE_HEADER_VALUE
+        BRIDGE_HEADER_VALUE,
+        if keep_alive { "keep-alive" } else { "close" }
     )
     .map_err(|error| format!("Impossibile finalizzare gli header media: {error}"))?;
     Ok(())
