@@ -3,6 +3,7 @@ mod connector_tls;
 mod core;
 mod identity;
 mod media_bridge;
+mod native_media_source;
 mod native_player;
 mod native_upload;
 mod pairing;
@@ -46,7 +47,9 @@ pub fn run() {
             app.manage(state);
             app.manage(relay_bridge);
             app.manage(native_upload::NativeUploadState::default());
-            app.manage(native_player::NativePlayerState::default());
+            let native_player = native_player::initialize(app)
+                .map_err(std::io::Error::other)?;
+            app.manage(native_player);
             app.manage(transport);
             app.manage(media_bridge);
             Ok(())
@@ -61,6 +64,11 @@ pub fn run() {
             media_bridge::baia_core_media_bridge_url,
             native_player::baia_core_native_player_status,
             native_player::baia_core_native_player_open,
+            native_player::baia_core_native_player_play,
+            native_player::baia_core_native_player_pause,
+            native_player::baia_core_native_player_seek,
+            native_player::baia_core_native_player_set_volume,
+            native_player::baia_core_native_player_get_state,
             native_player::baia_core_native_player_stop,
             transport::baia_core_api_request,
             identity::baia_core_device_identity,

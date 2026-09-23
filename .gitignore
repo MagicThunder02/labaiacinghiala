@@ -25,3 +25,6 @@ repo/
 docs/network_architecture.md
 TODO.md
 .codex-runtime/
+
+# Runtime libmpv locale: incluso nell'installer Tauri ma non versionato.
+src-tauri/resources/libmpv/*.dll

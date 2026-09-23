@@ -39,17 +39,46 @@ function parseClientLog(text) {
   let bytesToConsumer = 0;
   let bytesDiscarded = 0;
 
+  let nativeSourceRanges = 0;
+  let nativeSourceBytes = 0;
+  let nativeSourceRangeElapsedMs = 0;
+  let nativeSourceRangeMaxMs = 0;
+  let nativeSourceSeeks = 0;
+  let nativeSourceErrors = 0;
+
   for (const line of String(text).split(/\r?\n/)) {
     const match = line.match(/video_range_id=([^\s]+)\s+event=end\s+result=([^\s]+)\s+requested_start=(\d+)\s+requested_end=([^\s]+)\s+segment_count=(\d+)\s+bytes_from_connector=(\d+)\s+bytes_to_webview=(\d+)\s+bytes_discarded=(\d+)/);
-    if (!match) continue;
-    ranges += 1;
-    const outcome = Object.hasOwn(outcomes, match[2]) ? match[2] : 'other';
-    outcomes[outcome] += 1;
-    segments += Number(match[5]);
-    bytesFromConnector += Number(match[6]);
-    bytesToConsumer += Number(match[7]);
-    bytesDiscarded += Number(match[8]);
+    if (match) {
+      ranges += 1;
+      const outcome = Object.hasOwn(outcomes, match[2]) ? match[2] : 'other';
+      outcomes[outcome] += 1;
+      segments += Number(match[5]);
+      bytesFromConnector += Number(match[6]);
+      bytesToConsumer += Number(match[7]);
+      bytesDiscarded += Number(match[8]);
+      continue;
+    }
+
+    const nativeRange = line.match(/native_media_source\s+event=range\s+start=(\d+)\s+end=(\d+)\s+bytes=(\d+)\s+elapsed_ms=(\d+)/);
+    if (nativeRange) {
+      const bytes = Number(nativeRange[3]);
+      const elapsed = Number(nativeRange[4]);
+      nativeSourceRanges += 1;
+      nativeSourceBytes += bytes;
+      nativeSourceRangeElapsedMs += elapsed;
+      nativeSourceRangeMaxMs = Math.max(nativeSourceRangeMaxMs, elapsed);
+      continue;
+    }
+    if (/native_media_source\s+event=seek\b/.test(line)) nativeSourceSeeks += 1;
+    if (/native_media_source\s+event=(?:read_error|seek_error|open_error)\b/.test(line)) nativeSourceErrors += 1;
   }
+
+  const nativeSourceAverageRangeMs = nativeSourceRanges
+    ? Number((nativeSourceRangeElapsedMs / nativeSourceRanges).toFixed(2))
+    : 0;
+  const nativeSourceThroughputMbps = nativeSourceRangeElapsedMs
+    ? Number(((nativeSourceBytes * 8) / (nativeSourceRangeElapsedMs / 1000) / 1_000_000).toFixed(2))
+    : 0;
 
   return {
     ranges,
@@ -61,6 +90,15 @@ function parseClientLog(text) {
     discardedPercent: bytesFromConnector
       ? Number((bytesDiscarded / bytesFromConnector * 100).toFixed(2))
       : 0,
+    nativeSource: {
+      ranges: nativeSourceRanges,
+      bytes: nativeSourceBytes,
+      averageRangeMs: nativeSourceAverageRangeMs,
+      maxRangeMs: nativeSourceRangeMaxMs,
+      throughputMbps: nativeSourceThroughputMbps,
+      seeks: nativeSourceSeeks,
+      errors: nativeSourceErrors,
+    },
   };
 }
 
@@ -94,6 +132,14 @@ function renderReport(connector, client) {
       `Bytes from Connector: ${formatBytes(client.bytesFromConnector)}`,
       `Bytes to consumer: ${formatBytes(client.bytesToConsumer)}`,
       `Bytes discarded: ${formatBytes(client.bytesDiscarded)} (${client.discardedPercent}%)`,
+      '',
+      `Native source ranges: ${client.nativeSource.ranges}`,
+      `Native source bytes: ${formatBytes(client.nativeSource.bytes)}`,
+      `Native source average range: ${client.nativeSource.averageRangeMs} ms`,
+      `Native source max range: ${client.nativeSource.maxRangeMs} ms`,
+      `Native source measured throughput: ${client.nativeSource.throughputMbps} Mbps`,
+      `Native source seeks: ${client.nativeSource.seeks}`,
+      `Native source errors: ${client.nativeSource.errors}`,
     );
   }
   return lines.join('\n');

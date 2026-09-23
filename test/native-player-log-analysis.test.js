@@ -33,3 +33,20 @@ video_range_id=r2 event=end result=superseded requested_start=100 requested_end=
   assert.equal(parsed.bytesDiscarded, 20);
   assert.equal(parsed.discardedPercent, 11.11);
 });
+
+test('analizzatore PoC misura Range e throughput della NativeMediaSource baia://', () => {
+  const parsed = parseClientLog([
+    'native_media_source event=range start=0 end=4194303 bytes=4194304 elapsed_ms=1000',
+    'native_media_source event=seek offset=500000000',
+    'native_media_source event=range start=500000000 end=504194303 bytes=4194304 elapsed_ms=2000',
+    'native_media_source event=read_error error=test',
+  ].join('\n'));
+
+  assert.equal(parsed.nativeSource.ranges, 2);
+  assert.equal(parsed.nativeSource.bytes, 8388608);
+  assert.equal(parsed.nativeSource.averageRangeMs, 1500);
+  assert.equal(parsed.nativeSource.maxRangeMs, 2000);
+  assert.equal(parsed.nativeSource.seeks, 1);
+  assert.equal(parsed.nativeSource.errors, 1);
+  assert.ok(parsed.nativeSource.throughputMbps > 0);
+});

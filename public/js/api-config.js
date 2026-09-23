@@ -521,11 +521,56 @@
     const status = await nativeVideoPlayerStatus();
     if (!status?.enabled) return { used: false, status };
     if (!status.available) {
-      throw new Error('PoC native player abilitato, ma mpv non e disponibile sul client.');
+      throw new Error(status.detail || 'Native player abilitato, ma libmpv embedded non e disponibile nel client.');
     }
     const tauriCore = getTauriCore();
     const launch = await tauriCore.invoke('baia_core_native_player_open', { movieId: id });
     return { used: true, status, launch };
+  }
+
+
+  async function nativeVideoPlayerPlay() {
+    await ready;
+    const tauriCore = getTauriCore();
+    if (!tauriCore?.invoke) return false;
+    await tauriCore.invoke('baia_core_native_player_play');
+    return true;
+  }
+
+  async function nativeVideoPlayerPause() {
+    await ready;
+    const tauriCore = getTauriCore();
+    if (!tauriCore?.invoke) return false;
+    await tauriCore.invoke('baia_core_native_player_pause');
+    return true;
+  }
+
+  async function nativeVideoPlayerSeek(seconds) {
+    const value = Number(seconds);
+    if (!Number.isFinite(value) || value < 0) throw new Error('Posizione seek non valida.');
+    await ready;
+    const tauriCore = getTauriCore();
+    if (!tauriCore?.invoke) return false;
+    await tauriCore.invoke('baia_core_native_player_seek', { seconds: value });
+    return true;
+  }
+
+  async function nativeVideoPlayerSetVolume(value) {
+    const volume = Math.max(0, Math.min(100, Number(value)));
+    if (!Number.isFinite(volume)) throw new Error('Volume non valido.');
+    await ready;
+    const tauriCore = getTauriCore();
+    if (!tauriCore?.invoke) return false;
+    await tauriCore.invoke('baia_core_native_player_set_volume', { value: volume });
+    return true;
+  }
+
+  async function nativeVideoPlayerState() {
+    await ready;
+    if (!isBundledAppFrontend()) return { active: false, idle: true };
+    const tauriCore = getTauriCore();
+    if (!tauriCore?.invoke) return { active: false, idle: true };
+    return tauriCore.invoke('baia_core_native_player_get_state');
   }
 
   async function stopNativeVideoPlayer() {
@@ -563,6 +608,11 @@
     authorizeMediaUrl,
     nativeVideoPlayerStatus,
     tryOpenNativeVideoPlayer,
+    nativeVideoPlayerPlay,
+    nativeVideoPlayerPause,
+    nativeVideoPlayerSeek,
+    nativeVideoPlayerSetVolume,
+    nativeVideoPlayerState,
     stopNativeVideoPlayer,
     isTauri: isBundledAppFrontend,
     storageKey: STORAGE_KEY,

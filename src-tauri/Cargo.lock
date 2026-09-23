@@ -276,6 +276,7 @@ dependencies = [
  "getrandom 0.4.3",
  "jni 0.21.1",
  "keyring",
+ "libloading",
  "minisign-verify",
  "reqwest",
  "rustls",
