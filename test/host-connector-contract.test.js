@@ -121,16 +121,24 @@ test('streaming media usa keep-alive bounded sul TLS e sul Media Bridge locale',
   assert.match(mediaBridge, /for request_index in 1\.\.=MAX_REQUESTS_PER_CONNECTION/);
 });
 
-test('Media Bridge condivide il pool TLS, segmenta solo grandi Range video e chiude le risorse non-video', () => {
+test('Media Bridge V5 condivide il pool TLS e limita/prebufferizza solo il video', () => {
   assert.match(mediaBridge, /struct CachedMediaConnectorClient/);
   assert.match(mediaBridge, /connector_client: Mutex<Option<CachedMediaConnectorClient>>/);
   assert.match(mediaBridge, /fn client_for\(&self, server_fingerprint: &str\)/);
   assert.match(mediaBridge, /cached\.client\.clone\(\)/);
-  assert.match(mediaBridge, /CONNECTOR_MEDIA_CHUNK_BYTES: u64 = 32 \* 1024 \* 1024/);
+  assert.match(mediaBridge, /CONNECTOR_MEDIA_CHUNK_BYTES: u64 = 8 \* 1024 \* 1024/);
+  assert.match(mediaBridge, /MAX_CONCURRENT_VIDEO_REQUESTS: usize = 2/);
+  assert.match(mediaBridge, /VIDEO_PIPE_BUFFER_BYTES: usize = 256 \* 1024/);
+  assert.match(mediaBridge, /VIDEO_PIPE_BUFFER_SLOTS: usize = 16/);
+  assert.match(mediaBridge, /struct VideoLaneLimiter/);
+  assert.match(mediaBridge, /let _video_lane = if is_video_stream_path\(&route\.path\)/);
+  assert.match(mediaBridge, /sync_channel::<Vec<u8>>\(VIDEO_PIPE_BUFFER_SLOTS\)/);
+  assert.match(mediaBridge, /drain_connector_response\(response\)/);
   assert.match(mediaBridge, /method == Method::GET && is_video_stream_path\(&route\.path\)/);
   assert.match(mediaBridge, /stream_segmented_video_response/);
   assert.match(mediaBridge, /if !is_video_stream_path\(&route\.path\) \{[\s\S]{0,240}CONNECTION, "close"/);
   assert.match(mediaBridge, /if start_text\.is_empty\(\) \{[\s\S]{0,200}return None/);
+  assert.match(mediaBridge, /to_ascii_lowercase\(\)/);
 });
 
 test('direct media data plane mantiene Node nel control plane e valida il filesystem', () => {

@@ -8,14 +8,15 @@ use reqwest::{blocking::Client, Method};
 use serde::Serialize;
 use std::{
     collections::HashMap,
-    io::{BufRead, BufReader, ErrorKind, Write},
+    io::{BufRead, BufReader, ErrorKind, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        mpsc::{sync_channel, Receiver, SyncSender},
+        Arc, Condvar, Mutex,
     },
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::State;
 use uuid::Uuid;
@@ -27,7 +28,11 @@ const MAX_HEADER_LINE_BYTES: usize = 8192;
 const MAX_HEADER_COUNT: usize = 64;
 const KEEP_ALIVE_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REQUESTS_PER_CONNECTION: usize = 200;
-const CONNECTOR_MEDIA_CHUNK_BYTES: u64 = 32 * 1024 * 1024;
+const CONNECTOR_MEDIA_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
+const VIDEO_PIPE_BUFFER_BYTES: usize = 256 * 1024;
+const VIDEO_PIPE_BUFFER_SLOTS: usize = 16;
+const MAX_CONCURRENT_VIDEO_REQUESTS: usize = 2;
+const VIDEO_LANE_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 const BRIDGE_HEADER: &str = "X-Baia-Media-Bridge";
 const BRIDGE_HEADER_VALUE: &str = "media-v1";
 // Tauri's webview origin differs by platform: Windows and Android serve the
@@ -48,6 +53,62 @@ struct CachedMediaConnectorClient {
     client: Client,
 }
 
+struct VideoLaneLimiter {
+    active: Mutex<usize>,
+    available: Condvar,
+}
+
+impl VideoLaneLimiter {
+    fn new() -> Self {
+        Self {
+            active: Mutex::new(0),
+            available: Condvar::new(),
+        }
+    }
+
+    fn acquire(self: &Arc<Self>) -> Result<VideoLanePermit, String> {
+        let started = Instant::now();
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| "Limiter video del Media Bridge non disponibile.".to_string())?;
+        loop {
+            if *active < MAX_CONCURRENT_VIDEO_REQUESTS {
+                *active += 1;
+                return Ok(VideoLanePermit {
+                    limiter: Arc::clone(self),
+                });
+            }
+            let elapsed = started.elapsed();
+            if elapsed >= VIDEO_LANE_WAIT_TIMEOUT {
+                return Err("Timeout in attesa di una lane video del Media Bridge.".to_string());
+            }
+            let remaining = VIDEO_LANE_WAIT_TIMEOUT - elapsed;
+            let (next, timeout) = self
+                .available
+                .wait_timeout(active, remaining)
+                .map_err(|_| "Limiter video del Media Bridge non disponibile.".to_string())?;
+            active = next;
+            if timeout.timed_out() && *active >= MAX_CONCURRENT_VIDEO_REQUESTS {
+                return Err("Timeout in attesa di una lane video del Media Bridge.".to_string());
+            }
+        }
+    }
+}
+
+struct VideoLanePermit {
+    limiter: Arc<VideoLaneLimiter>,
+}
+
+impl Drop for VideoLanePermit {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.limiter.active.lock() {
+            *active = (*active).saturating_sub(1);
+            self.limiter.available.notify_one();
+        }
+    }
+}
+
 #[derive(Clone)]
 struct BridgeRoute {
     path: String,
@@ -55,6 +116,7 @@ struct BridgeRoute {
     access_grant: String,
     connector_url: String,
     connector_client: Client,
+    video_limiter: Arc<VideoLaneLimiter>,
     expires: u64,
 }
 
@@ -77,6 +139,7 @@ pub struct MediaBridge {
     address: SocketAddr,
     routes: Arc<Mutex<HashMap<String, BridgeRoute>>>,
     connector_client: Mutex<Option<CachedMediaConnectorClient>>,
+    video_limiter: Arc<VideoLaneLimiter>,
     shutdown: Arc<AtomicBool>,
 }
 
@@ -88,6 +151,7 @@ impl MediaBridge {
             .local_addr()
             .map_err(|error| format!("Impossibile leggere la porta del ponte media: {error}"))?;
         let routes = Arc::new(Mutex::new(HashMap::new()));
+        let video_limiter = Arc::new(VideoLaneLimiter::new());
         let shutdown = Arc::new(AtomicBool::new(false));
         let worker_routes = Arc::clone(&routes);
         let worker_shutdown = Arc::clone(&shutdown);
@@ -101,6 +165,7 @@ impl MediaBridge {
             address,
             routes,
             connector_client: Mutex::new(None),
+            video_limiter,
             shutdown,
         })
     }
@@ -154,6 +219,7 @@ impl MediaBridge {
                 access_grant,
                 connector_url,
                 connector_client,
+                video_limiter: Arc::clone(&self.video_limiter),
                 expires,
             },
         );
@@ -351,6 +417,22 @@ fn handle_connection(
             return write_error(&mut stream, 410, "Gone");
         };
 
+        // Bound *local video Range streams*, not individual HTTP segments. A
+        // permit therefore stays with this WebView request across all of its
+        // sequential Connector segments. This prevents many overlapping Range
+        // workers from taking turns on the pool and recreating TLS churn.
+        let _video_lane = if is_video_stream_path(&route.path) {
+            match route.video_limiter.acquire() {
+                Ok(permit) => Some(permit),
+                Err(error) => {
+                    eprintln!("Media Bridge video lane non disponibile: {error}");
+                    return write_error(&mut stream, 503, "Service Unavailable");
+                }
+            }
+        } else {
+            None
+        };
+
         let keep_alive = !connection_close && request_index < MAX_REQUESTS_PER_CONNECTION;
         let chunkable_range = if method == Method::GET && is_video_stream_path(&route.path) {
             range.as_deref().and_then(parse_chunkable_range)
@@ -469,6 +551,7 @@ fn handle_connection(
 
         if let Err(error) = write_status_and_headers(&mut stream, &response, keep_alive) {
             if is_client_disconnect_message(&error) {
+                drain_bounded_video_response_on_disconnect(&route, &mut response);
                 return Ok(());
             }
             return Err(error);
@@ -478,6 +561,7 @@ fn handle_connection(
                 if !is_client_disconnect(&error) {
                     return Err(format!("Streaming dal ponte media interrotto: {error}"));
                 }
+                drain_bounded_video_response_on_disconnect(&route, &mut response);
                 return Ok(());
             }
         }
@@ -547,7 +631,7 @@ fn send_connector_media_request(
     method: Method,
     range: Option<String>,
     if_range: Option<String>,
-) -> Result<reqwest::blocking::Response, reqwest::Error> {
+) -> Result<reqwest::blocking::Response, String> {
     let frame = ConnectorMediaRequest {
         protocol_version: PROTOCOL_VERSION,
         request_id: Uuid::new_v4().to_string(),
@@ -567,7 +651,10 @@ fn send_connector_media_request(
         // only video participates in the remote persistent-connection pool.
         request = request.header(reqwest::header::CONNECTION, "close");
     }
-    request.json(&frame).send()
+    request
+        .json(&frame)
+        .send()
+        .map_err(|error| format!("Richiesta media al Connector fallita: {error}"))
 }
 
 fn response_header_string(
@@ -669,6 +756,70 @@ fn write_segmented_status_and_headers(
     Ok(())
 }
 
+fn drain_connector_response(response: &mut reqwest::blocking::Response) {
+    let _ = std::io::copy(response, &mut std::io::sink());
+}
+
+fn drain_bounded_video_response_on_disconnect(
+    route: &BridgeRoute,
+    response: &mut reqwest::blocking::Response,
+) {
+    if !is_video_stream_path(&route.path) {
+        return;
+    }
+    let bounded = response
+        .headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(|length| length <= CONNECTOR_MEDIA_CHUNK_BYTES)
+        .unwrap_or(false);
+    if bounded {
+        drain_connector_response(response);
+    }
+}
+
+fn send_response_body_to_pipe(
+    response: &mut reqwest::blocking::Response,
+    sender: &SyncSender<Vec<u8>>,
+) -> Result<bool, String> {
+    loop {
+        let mut chunk = vec![0u8; VIDEO_PIPE_BUFFER_BYTES];
+        let read = response
+            .read(&mut chunk)
+            .map_err(|error| format!("Lettura segmento media dal Connector fallita: {error}"))?;
+        if read == 0 {
+            return Ok(true);
+        }
+        chunk.truncate(read);
+        if sender.send(chunk).is_err() {
+            // The WebView abandoned this local response (typically because of
+            // a seek). Finish consuming only the current bounded remote
+            // segment so reqwest can return its TLS connection to the pool.
+            drain_connector_response(response);
+            return Ok(false);
+        }
+    }
+}
+
+fn write_video_pipe(
+    mut stream: TcpStream,
+    receiver: Receiver<Vec<u8>>,
+) -> Result<(), String> {
+    while let Ok(chunk) = receiver.recv() {
+        if let Err(error) = stream.write_all(&chunk) {
+            if is_client_disconnect(&error) {
+                return Err(format!("client disconnect: {error}"));
+            }
+            return Err(format!("Streaming locale del video interrotto: {error}"));
+        }
+    }
+    stream
+        .flush()
+        .map_err(|error| format!("Flush locale del video fallito: {error}"))?;
+    Ok(())
+}
+
 fn stream_segmented_video_response(
     stream: &mut TcpStream,
     route: &BridgeRoute,
@@ -695,47 +846,106 @@ fn stream_segmented_video_response(
         etag.as_deref(),
         last_modified.as_deref(),
     )?;
-    write_segmented_status_and_headers(stream, &first_response, start, end, total, keep_alive)?;
-
-    if let Err(error) = std::io::copy(&mut first_response, stream) {
-        if is_client_disconnect(&error) {
-            return Err(format!("client disconnect: {error}"));
+    if let Err(error) = write_segmented_status_and_headers(
+        stream,
+        &first_response,
+        start,
+        end,
+        total,
+        keep_alive,
+    ) {
+        if is_client_disconnect_message(&error) {
+            drain_connector_response(&mut first_response);
         }
-        return Err(format!("Streaming segmento media iniziale interrotto: {error}"));
+        return Err(error);
     }
-    drop(first_response);
 
-    let mut next_start = first_content_range.end.saturating_add(1);
-    while next_start <= end {
-        let next_end = end.min(next_start.saturating_add(CONNECTOR_MEDIA_CHUNK_BYTES - 1));
-        let chunk_range = format!("bytes={next_start}-{next_end}");
-        let mut response = send_connector_media_request(
+    // A small bounded queue lets the Connector stay a few MiB ahead of the
+    // WebView without buffering an entire Range (or even an entire segment).
+    // The writer owns a cloned loopback socket; this thread remains the sole
+    // owner of the remote responses and can therefore drain a cancelled
+    // bounded segment before releasing its TLS lane.
+    let writer_stream = stream
+        .try_clone()
+        .map_err(|error| format!("Impossibile clonare il socket locale video: {error}"))?;
+    let (sender, receiver) = sync_channel::<Vec<u8>>(VIDEO_PIPE_BUFFER_SLOTS);
+    let writer = thread::Builder::new()
+        .name("baia-media-video-writer".to_string())
+        .spawn(move || write_video_pipe(writer_stream, receiver))
+        .map_err(|error| format!("Impossibile avviare il writer video locale: {error}"))?;
+
+    let mut current_start = first_content_range.start;
+    let mut current_end = first_content_range.end;
+    let mut response = first_response;
+    let mut producer_error: Option<String> = None;
+
+    loop {
+        match send_response_body_to_pipe(&mut response, &sender) {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(error) => {
+                producer_error = Some(error);
+                break;
+            }
+        }
+        drop(response);
+
+        if current_end >= end {
+            break;
+        }
+        current_start = current_end.saturating_add(1);
+        current_end = end.min(current_start.saturating_add(CONNECTOR_MEDIA_CHUNK_BYTES - 1));
+        let chunk_range = format!("bytes={current_start}-{current_end}");
+        let next = match send_connector_media_request(
             route,
             Method::GET,
             Some(chunk_range),
             if_range.clone(),
-        )
-        .map_err(|error| format!("Richiesta segmento media al Connector fallita: {error}"))?;
-        if response.status().is_redirection() {
-            return Err("Redirect Connector non consentito durante streaming segmentato.".to_string());
+        ) {
+            Ok(response) => response,
+            Err(error) => {
+                producer_error = Some(format!(
+                    "Richiesta segmento media al Connector fallita: {error}"
+                ));
+                break;
+            }
+        };
+        if next.status().is_redirection() {
+            producer_error = Some(
+                "Redirect Connector non consentito durante streaming segmentato.".to_string(),
+            );
+            break;
         }
-        validate_segment_response(
-            &response,
-            next_start,
-            next_end,
+        if let Err(error) = validate_segment_response(
+            &next,
+            current_start,
+            current_end,
             total,
             etag.as_deref(),
             last_modified.as_deref(),
-        )?;
-        if let Err(error) = std::io::copy(&mut response, stream) {
-            if is_client_disconnect(&error) {
-                return Err(format!("client disconnect: {error}"));
-            }
-            return Err(format!("Streaming segmento media interrotto: {error}"));
+        ) {
+            producer_error = Some(error);
+            break;
         }
-        next_start = next_end.saturating_add(1);
+        response = next;
     }
-    Ok(())
+
+    drop(sender);
+    let writer_result = writer
+        .join()
+        .map_err(|_| "Writer video locale terminato in modo inatteso.".to_string())?;
+
+    if let Some(error) = producer_error {
+        // A client disconnect wins over an upstream error because it is the
+        // normal mechanism used by the WebView to abandon an obsolete Range.
+        if let Err(writer_error) = &writer_result {
+            if is_client_disconnect_message(writer_error) {
+                return Err(writer_error.clone());
+            }
+        }
+        return Err(error);
+    }
+    writer_result
 }
 
 fn read_limited_line<R: BufRead>(reader: &mut R, target: &mut String, limit: usize) -> Result<(), String> {
@@ -790,6 +1000,7 @@ fn is_client_disconnect(error: &std::io::Error) -> bool {
 }
 
 fn is_client_disconnect_message(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
     message.contains("os error 10053")
         || message.contains("os error 10054")
         || message.contains("broken pipe")
