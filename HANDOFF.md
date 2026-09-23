@@ -125,11 +125,13 @@ Non cancellarli o azzerarli automaticamente.
 Il progetto contiene ora una migrazione opt-in del video verso `Node = control plane` e `Host Connector = media data plane`.
 
 - TLS media: una connessione può servire fino a 200 richieste HTTP/1.1 sequenziali; idle timeout 30 s; `Connection: close` del client e HTTP/1.0 chiudono la connessione.
-- Media Bridge locale: stessa politica 200 richieste / 30 s, senza pipelining concorrente.
+- Media Bridge locale: stessa politica 200 richieste / 30 s, senza pipelining concorrente. I Range video maggiori di 8 MiB vengono inoltre segmentati verso il Connector in blocchi bounded da massimo 8 MiB; la WebView continua a ricevere un unico 206 con framing del Range originario. Questo evita che un seek lasci una risposta remota multi-GB incompleta e renda la TLS non riutilizzabile.
 - Node: `HEAD /api/movies/:id/stream` attraversa gli stessi middleware di device, account e Films/Series, fa `stat` e restituisce metadata; il descriptor filesystem interno viene emesso solo su richiesta loopback marcata dal Connector.
 - Direct-file: attivare `BAIA_DIRECT_MEDIA_DATA_PLANE=true`. Il Connector usa lo stesso `LIBRARY_PATH`, valida/canonicalizza il path autorizzato, apre il file in sola lettura e applica Range direttamente in Rust.
 - Fallback: con flag false il GET Node storico continua a trasportare il video; non esiste fallback silenzioso dal direct-file a un altro file quando il flag è true.
 - Sicurezza: nessun path client viene accettato; il path fisico deriva esclusivamente dal descriptor Node. Il descriptor non è tra gli header inoltrati al client.
 - ACL richieste: il servizio Connector deve avere READ sulla libreria video; evitare WRITE/DELETE/CREATE.
+
+Baseline reale prima della segmentazione: 1027 richieste media, 812 connessioni TLS distinte, 215 richieste riutilizzate e massimo 2 richieste per connessione. Dopo la segmentazione ripetere lo stesso conteggio: il criterio resta `handshake TLS << richieste Connector`, verificando anche che playback/seek non cambino semanticamente.
 
 Test ambiente di handoff: i test Node mirati di contratto/accesso/Range passano. La suite completa richiede `npm ci`; nell'ambiente di modifica lo ZIP non conteneva `node_modules` completi. `cargo` non era installato, quindi `cargo test` resta obbligatorio prima del rollout.

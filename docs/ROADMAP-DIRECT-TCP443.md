@@ -108,6 +108,7 @@ Implementazione introdotta sul canale `/baia/v1/media`:
 
 - HTTP/1.1 persistente tra Tauri Media Bridge e Host Connector, con `KEEP_ALIVE_IDLE_TIMEOUT = 30s` e `MAX_REQUESTS_PER_CONNECTION = 200`;
 - keep-alive equivalente sul server HTTP loopback del Media Bridge;
+- per i video, il Media Bridge segmenta i Range remoti maggiori di 8 MiB in richieste Connector bounded da massimo 8 MiB, mantenendo verso la WebView un unico `206` con il `Content-Range` originario. Ogni segmento viene consumato integralmente e senza buffering completo in RAM, così la connessione TLS può tornare nel pool anche quando la WebView lavora con Range multi-GB;
 - log non sensibili `connector_connection_id`, `request_index_on_connection`, `transport_reused`, `media_source` e `bytes_streamed`;
 - `HEAD /api/movies/:id/stream` esplicito in Node per autorizzare e risolvere il file senza aprire `createReadStream`;
 - feature flag `BAIA_DIRECT_MEDIA_DATA_PLANE=true` per spostare il body video da Node al Connector;
@@ -137,4 +138,8 @@ control: Host Connector -> HEAD Node -> auth/account/permission/lookup -> descri
 data:    file -> Host Connector -> TLS persistente -> Tauri Media Bridge -> WebView
 ```
 
-La revoca resta immediata a granularità di richiesta: ogni nuova richiesta Range viene nuovamente autorizzata da Node. Non è stata introdotta una cache di autorizzazione lunga.
+La revoca resta immediata a granularità di richiesta: ogni segmento Connector viene nuovamente autorizzato da Node. Non è stata introdotta una cache di autorizzazione lunga.
+
+### Baseline playback reale keep-alive
+
+Sul test reale del 23 settembre 2026, prima della segmentazione client, 1027 richieste `/baia/v1/media` hanno prodotto 812 connessioni TLS distinte: 812 richieste con `transport_reused=false`, 215 con `transport_reused=true`, e `request_index_on_connection` non oltre 2. Il pooling era quindi funzionante ma insufficiente, perché la WebView apriva Range da centinaia di MB o diversi GB e li abbandonava durante seek/preload; una risposta HTTP/1.1 non consumata non può essere rimessa nel pool. La segmentazione bounded del Media Bridge è stata introdotta per rendere il riuso effettivo nel comportamento reale del player.
