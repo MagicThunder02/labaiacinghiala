@@ -275,8 +275,6 @@ impl Write for SharedTlsStream {
 struct ConnectorMediaRequest {
     protocol_version: u16,
     request_id: String,
-    #[serde(default)]
-    client_kind: Option<String>,
     method: String,
     path: String,
     #[serde(default)]
@@ -1550,14 +1548,7 @@ fn handle_direct_media_request(
         return write_connector_error(stream, 502, Some(request_id), "HOST_CONNECTOR_MEDIA_REDIRECT", "Node Baia ha restituito un redirect media non consentito.");
     }
     if !control.status().is_success() {
-        println!(
-            "media={} media_source=direct_file client_kind={} request_path={} authorization_status={} elapsed_ms={}",
-            request_id,
-            validated.client_kind.as_deref().unwrap_or("unknown"),
-            validated.path,
-            control.status().as_u16(),
-            started.elapsed().as_millis()
-        );
+        println!("media={} media_source=direct_file authorization_status={} elapsed_ms={}", request_id, control.status().as_u16(), started.elapsed().as_millis());
         return write_media_response(stream, &mut control, true, keep_alive);
     }
 
@@ -1623,10 +1614,8 @@ fn handle_direct_media_request(
     }
     stream.flush().ok();
     println!(
-        "media={} media_source=direct_file client_kind={} request_path={} method={} requested_start={} requested_end={} requested_bytes={} bytes_streamed={} client_disconnected={} status={} control_elapsed_ms={} elapsed_ms={}",
+        "media={} media_source=direct_file method={} requested_start={} requested_end={} requested_bytes={} bytes_streamed={} client_disconnected={} status={} control_elapsed_ms={} elapsed_ms={}",
         request_id,
-        validated.client_kind.as_deref().unwrap_or("unknown"),
-        validated.path,
         method.as_str(),
         requested_start,
         requested_end,
@@ -1657,16 +1646,6 @@ fn validate_media_request(mut request: ConnectorMediaRequest) -> Result<Connecto
     }
     validate_opaque_auth_value(&request.device_auth.signature, "firma media")?;
 
-    request.client_kind = match request.client_kind.take() {
-        None => None,
-        Some(value) => {
-            let normalized = value.trim().to_ascii_lowercase();
-            if !matches!(normalized.as_str(), "native_media_source" | "legacy_media_bridge") {
-                return Err("Client kind media non valido.".to_string());
-            }
-            Some(normalized)
-        }
-    };
     request.method = normalize_media_method(&request.method)?;
     request.path = normalize_media_path(&request.path)?;
     request.range = normalize_optional_media_header(request.range.take(), "Range", 256)?;

@@ -146,24 +146,3 @@ test('Tauri mantiene Media Bridge legacy per fallback ma native video usa modulo
   assert.match(lib, /native_player::baia_core_native_player_stop/);
   assert.match(lib, /media_bridge::baia_core_media_bridge_url/);
 });
-
-
-test('diagnostica Phase 4.1 distingue NativeMediaSource dal Media Bridge legacy end-to-end', () => {
-  const nativeSource = read('src-tauri/src/native_media_source.rs');
-  const mediaBridge = read('src-tauri/src/media_bridge.rs');
-  const connector = read('host-connector/src/main.rs');
-  const analyzer = read('scripts/analyze-native-player-poc.js');
-  const originSummary = read('scripts/phase4-1-connector-origin-summary.sh');
-
-  assert.match(nativeSource, /client_kind: "native_media_source"/);
-  assert.match(nativeSource, /event=http_request[\s\S]{0,180}client_kind=native_media_source/);
-  assert.match(mediaBridge, /client_kind: "legacy_media_bridge"/);
-  assert.match(mediaBridge, /event=http_request[\s\S]{0,180}client_kind=legacy_media_bridge/);
-  assert.match(connector, /client_kind: Option<String>/);
-  assert.match(connector, /client_kind=\{\} request_path=\{\}/);
-  assert.match(connector, /"native_media_source" \| "legacy_media_bridge"/);
-  assert.match(analyzer, /clientKinds/);
-  assert.match(analyzer, /rangeSizesByClientKind/);
-  assert.match(originSummary, /client_kind=native_media_source/);
-  assert.match(originSummary, /client_kind=legacy_media_bridge/);
-});

@@ -202,7 +202,6 @@ fn configured_window_bytes() -> usize {
 struct ConnectorMediaRequest<'a> {
     protocol_version: u16,
     request_id: String,
-    client_kind: &'static str,
     method: &'a str,
     path: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -250,11 +249,9 @@ fn request_media(
     range: Option<String>,
     if_range: Option<String>,
 ) -> Result<Response, String> {
-    let request_id = Uuid::new_v4().to_string();
     let frame = ConnectorMediaRequest {
         protocol_version: PROTOCOL_VERSION,
-        request_id: request_id.clone(),
-        client_kind: "native_media_source",
+        request_id: Uuid::new_v4().to_string(),
         method,
         path: &template.path,
         range,
@@ -262,12 +259,6 @@ fn request_media(
         access_grant: &template.access_grant,
         device_auth: &template.authorization,
     };
-    eprintln!(
-        "native_media_source event=http_request request_id={} client_kind=native_media_source method={} range={}",
-        request_id,
-        method,
-        frame.range.as_deref().unwrap_or("none"),
-    );
     let mut request = client
         .post(&template.connector_url)
         .header(reqwest::header::ACCEPT, "*/*");

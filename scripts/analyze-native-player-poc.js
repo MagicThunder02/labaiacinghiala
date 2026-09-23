@@ -24,8 +24,6 @@ function parseConnectorLog(text) {
   let directControlElapsedMs = 0;
   let directElapsedMs = 0;
   let directMaxElapsedMs = 0;
-  const directClientKinds = new Map();
-  const directRangeSizesByClientKind = new Map();
 
   for (const line of String(text).split(/\r?\n/)) {
     if (/broken pipe/i.test(line)) brokenPipes += 1;
@@ -38,20 +36,15 @@ function parseConnectorLog(text) {
       maxRequestIndex = Math.max(maxRequestIndex, Number(connection[2]));
     }
 
-    const direct = line.match(/media_source=direct_file(?:\s+client_kind=([^\s]+)\s+request_path=([^\s]+))?\s+method=([^\s]+)\s+requested_start=(\d+)\s+requested_end=(\d+)\s+requested_bytes=(\d+)\s+bytes_streamed=(\d+)\s+client_disconnected=(true|false)\s+status=(\d+)\s+control_elapsed_ms=(\d+)\s+elapsed_ms=(\d+)/);
+    const direct = line.match(/media_source=direct_file\s+method=([^\s]+)\s+requested_start=(\d+)\s+requested_end=(\d+)\s+requested_bytes=(\d+)\s+bytes_streamed=(\d+)\s+client_disconnected=(true|false)\s+status=(\d+)\s+control_elapsed_ms=(\d+)\s+elapsed_ms=(\d+)/);
     if (direct) {
       directFileRequests += 1;
-      const clientKind = direct[1] || 'unknown';
-      const method = direct[3];
-      const requestedBytes = Number(direct[6]);
-      const streamed = Number(direct[7]);
-      const disconnected = direct[8] === 'true';
-      const controlMs = Number(direct[10]);
-      const elapsedMs = Number(direct[11]);
-      directClientKinds.set(clientKind, (directClientKinds.get(clientKind) || 0) + 1);
-      if (!directRangeSizesByClientKind.has(clientKind)) directRangeSizesByClientKind.set(clientKind, new Map());
-      const rangeSizes = directRangeSizesByClientKind.get(clientKind);
-      rangeSizes.set(requestedBytes, (rangeSizes.get(requestedBytes) || 0) + 1);
+      const method = direct[1];
+      const requestedBytes = Number(direct[4]);
+      const streamed = Number(direct[5]);
+      const disconnected = direct[6] === 'true';
+      const controlMs = Number(direct[8]);
+      const elapsedMs = Number(direct[9]);
       if (method === 'GET') {
         directFileGetRequests += 1;
         directRequestedBytes += requestedBytes;
@@ -87,13 +80,6 @@ function parseConnectorLog(text) {
       averageControlMs: directFileGetRequests ? round(directControlElapsedMs / directFileGetRequests) : 0,
       averageElapsedMs: directFileGetRequests ? round(directElapsedMs / directFileGetRequests) : 0,
       maxElapsedMs: directMaxElapsedMs,
-      clientKinds: Object.fromEntries([...directClientKinds.entries()].sort()),
-      rangeSizesByClientKind: Object.fromEntries(
-        [...directRangeSizesByClientKind.entries()].sort().map(([kind, sizes]) => [
-          kind,
-          Object.fromEntries([...sizes.entries()].sort((a, b) => a[0] - b[0])),
-        ]),
-      ),
     },
   };
 }
@@ -253,8 +239,6 @@ function renderReport(connector, client) {
     `Direct-file avg control: ${connector.directFile.averageControlMs} ms`,
     `Direct-file avg elapsed: ${connector.directFile.averageElapsedMs} ms`,
     `Direct-file max elapsed: ${connector.directFile.maxElapsedMs} ms`,
-    `Direct-file client kinds: ${JSON.stringify(connector.directFile.clientKinds)}`,
-    `Direct-file range sizes by client kind: ${JSON.stringify(connector.directFile.rangeSizesByClientKind)}`,
   ];
   if (client) {
     lines.push(

@@ -132,7 +132,6 @@ struct BridgeRoute {
 struct ConnectorMediaRequest {
     protocol_version: u16,
     request_id: String,
-    client_kind: &'static str,
     method: String,
     path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -665,11 +664,9 @@ fn send_connector_media_request(
     range: Option<String>,
     if_range: Option<String>,
 ) -> Result<reqwest::blocking::Response, String> {
-    let request_id = Uuid::new_v4().to_string();
     let frame = ConnectorMediaRequest {
         protocol_version: PROTOCOL_VERSION,
-        request_id: request_id.clone(),
-        client_kind: "legacy_media_bridge",
+        request_id: Uuid::new_v4().to_string(),
         method: method.as_str().to_string(),
         path: route.path.clone(),
         range,
@@ -677,13 +674,6 @@ fn send_connector_media_request(
         access_grant: route.access_grant.clone(),
         device_auth: route.authorization.clone(),
     };
-    eprintln!(
-        "media_bridge event=http_request request_id={} client_kind=legacy_media_bridge method={} range={} path={}",
-        request_id,
-        method.as_str(),
-        frame.range.as_deref().unwrap_or("none"),
-        route.path,
-    );
     let mut request = route
         .connector_client
         .post(&route.connector_url)
