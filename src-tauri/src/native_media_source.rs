@@ -2,7 +2,7 @@ use crate::{auth, connector_tls, core::CoreState};
 use reqwest::blocking::{Client, Response};
 use serde::Serialize;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     ffi::{c_char, c_void, CStr},
     io::Read,
     panic::{catch_unwind, AssertUnwindSafe},
@@ -17,10 +17,23 @@ use uuid::Uuid;
 const PROTOCOL_VERSION: u16 = 1;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
-const DEFAULT_READ_AHEAD_BYTES: usize = 4 * 1024 * 1024;
-const MIN_READ_AHEAD_BYTES: usize = 256 * 1024;
-const MAX_READ_AHEAD_BYTES: usize = 16 * 1024 * 1024;
-const READ_AHEAD_ENV: &str = "BAIA_NATIVE_READ_AHEAD_BYTES";
+
+// La NativeMediaSource non deve diventare un secondo player. Questi valori
+// servono soltanto ad aggregare i piccoli read() del demuxer in Range bounded.
+const INITIAL_RANGE_BYTES: usize = 1 * 1024 * 1024;
+const MID_RANGE_BYTES: usize = 2 * 1024 * 1024;
+const DEFAULT_MAX_RANGE_BYTES: usize = 4 * 1024 * 1024;
+const ABSOLUTE_MAX_RANGE_BYTES: usize = 4 * 1024 * 1024;
+const DEFAULT_WINDOW_BYTES: usize = 16 * 1024 * 1024;
+const MIN_WINDOW_BYTES: usize = 8 * 1024 * 1024;
+const MAX_WINDOW_BYTES: usize = 32 * 1024 * 1024;
+const MAX_STREAM_READ_BYTES: usize = 16 * 1024 * 1024;
+const MEDIA_POOL_SIZE: usize = 2;
+
+// Manteniamo il nome Phase 3 per compatibilità con eventuali env già impostate:
+// ora rappresenta il CAP massimo del Range adattivo, non la dimensione fissa.
+const MAX_RANGE_ENV: &str = "BAIA_NATIVE_READ_AHEAD_BYTES";
+const WINDOW_ENV: &str = "BAIA_NATIVE_WINDOW_BYTES";
 const PROTOCOL: &str = "baia";
 const MPV_ERROR_LOADING_FAILED: i32 = -13;
 const MPV_ERROR_GENERIC: i64 = -20;
@@ -34,12 +47,21 @@ pub struct NativeMediaSourceStats {
     pub bytes_served: u64,
     pub cache_hits: u64,
     pub cache_misses: u64,
+    pub cache_seek_hits: u64,
     pub seeks: u64,
     pub errors: u64,
     pub last_range_start: Option<u64>,
     pub last_range_end: Option<u64>,
     pub last_range_elapsed_ms: Option<u64>,
-    pub read_ahead_bytes: usize,
+    pub last_range_bytes: Option<u64>,
+    pub current_range_bytes: u64,
+    pub max_range_bytes: usize,
+    pub window_bytes: usize,
+    pub current_window_bytes: u64,
+    pub generation: u64,
+    pub sequential_fetches: u64,
+    pub pool_slot_0_requests: u64,
+    pub pool_slot_1_requests: u64,
 }
 
 #[derive(Default)]
@@ -50,16 +72,24 @@ struct NativeMediaSourceMetrics {
     bytes_served: AtomicU64,
     cache_hits: AtomicU64,
     cache_misses: AtomicU64,
+    cache_seek_hits: AtomicU64,
     seeks: AtomicU64,
     errors: AtomicU64,
     last_range_start: AtomicU64,
     last_range_end: AtomicU64,
     last_range_elapsed_ms: AtomicU64,
+    last_range_bytes: AtomicU64,
+    current_range_bytes: AtomicU64,
+    current_window_bytes: AtomicU64,
+    generation: AtomicU64,
+    sequential_fetches: AtomicU64,
+    pool_slot_0_requests: AtomicU64,
+    pool_slot_1_requests: AtomicU64,
     has_last_range: AtomicBool,
 }
 
 impl NativeMediaSourceMetrics {
-    fn snapshot(&self, read_ahead_bytes: usize) -> NativeMediaSourceStats {
+    fn snapshot(&self, max_range_bytes: usize, window_bytes: usize) -> NativeMediaSourceStats {
         let has_last_range = self.has_last_range.load(Ordering::Relaxed);
         NativeMediaSourceStats {
             remote_requests: self.remote_requests.load(Ordering::Relaxed),
@@ -68,13 +98,22 @@ impl NativeMediaSourceMetrics {
             bytes_served: self.bytes_served.load(Ordering::Relaxed),
             cache_hits: self.cache_hits.load(Ordering::Relaxed),
             cache_misses: self.cache_misses.load(Ordering::Relaxed),
+            cache_seek_hits: self.cache_seek_hits.load(Ordering::Relaxed),
             seeks: self.seeks.load(Ordering::Relaxed),
             errors: self.errors.load(Ordering::Relaxed),
             last_range_start: has_last_range.then(|| self.last_range_start.load(Ordering::Relaxed)),
             last_range_end: has_last_range.then(|| self.last_range_end.load(Ordering::Relaxed)),
             last_range_elapsed_ms: has_last_range
                 .then(|| self.last_range_elapsed_ms.load(Ordering::Relaxed)),
-            read_ahead_bytes,
+            last_range_bytes: has_last_range.then(|| self.last_range_bytes.load(Ordering::Relaxed)),
+            current_range_bytes: self.current_range_bytes.load(Ordering::Relaxed),
+            max_range_bytes,
+            window_bytes,
+            current_window_bytes: self.current_window_bytes.load(Ordering::Relaxed),
+            generation: self.generation.load(Ordering::Relaxed),
+            sequential_fetches: self.sequential_fetches.load(Ordering::Relaxed),
+            pool_slot_0_requests: self.pool_slot_0_requests.load(Ordering::Relaxed),
+            pool_slot_1_requests: self.pool_slot_1_requests.load(Ordering::Relaxed),
         }
     }
 }
@@ -83,10 +122,12 @@ impl NativeMediaSourceMetrics {
 pub struct NativeMediaSourceTemplate {
     path: String,
     connector_url: String,
-    connector_client: Client,
+    metadata_client: Client,
+    media_clients: [Client; MEDIA_POOL_SIZE],
     access_grant: String,
     authorization: auth::MediaAuthorization,
-    read_ahead_bytes: usize,
+    max_range_bytes: usize,
+    window_bytes: usize,
     metrics: Arc<NativeMediaSourceMetrics>,
 }
 
@@ -99,35 +140,61 @@ impl NativeMediaSourceTemplate {
         let (connector_endpoint, server_fingerprint) = state.connector_context()?;
         let connector_url =
             connector_tls::connector_url(&connector_endpoint, connector_tls::MEDIA_PATH)?;
-        let connector_client = connector_tls::blocking_client(
+
+        // Metadata e body non condividono il pool: la HEAD usa Connection: close,
+        // mentre i due client media conservano una TLS persistente ciascuno.
+        let metadata_client = connector_tls::blocking_client(
             &server_fingerprint,
             CONNECT_TIMEOUT,
             Some(REQUEST_TIMEOUT),
         )?;
+        let media_clients = [
+            connector_tls::blocking_media_client(
+                &server_fingerprint,
+                CONNECT_TIMEOUT,
+                Some(REQUEST_TIMEOUT),
+            )?,
+            connector_tls::blocking_media_client(
+                &server_fingerprint,
+                CONNECT_TIMEOUT,
+                Some(REQUEST_TIMEOUT),
+            )?,
+        ];
         let access_grant = state.transport_access_grant()?;
         let authorization = auth::authorize_media_path(&path, state)?;
         Ok(Self {
             path,
             connector_url,
-            connector_client,
+            metadata_client,
+            media_clients,
             access_grant,
             authorization,
-            read_ahead_bytes: configured_read_ahead_bytes(),
+            max_range_bytes: configured_max_range_bytes(),
+            window_bytes: configured_window_bytes(),
             metrics: Arc::new(NativeMediaSourceMetrics::default()),
         })
     }
 
     fn stats(&self) -> NativeMediaSourceStats {
-        self.metrics.snapshot(self.read_ahead_bytes)
+        self.metrics
+            .snapshot(self.max_range_bytes, self.window_bytes)
     }
 }
 
-fn configured_read_ahead_bytes() -> usize {
-    std::env::var(READ_AHEAD_ENV)
+fn configured_max_range_bytes() -> usize {
+    std::env::var(MAX_RANGE_ENV)
         .ok()
         .and_then(|value| value.trim().parse::<usize>().ok())
-        .unwrap_or(DEFAULT_READ_AHEAD_BYTES)
-        .clamp(MIN_READ_AHEAD_BYTES, MAX_READ_AHEAD_BYTES)
+        .unwrap_or(DEFAULT_MAX_RANGE_BYTES)
+        .clamp(INITIAL_RANGE_BYTES, ABSOLUTE_MAX_RANGE_BYTES)
+}
+
+fn configured_window_bytes() -> usize {
+    std::env::var(WINDOW_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_WINDOW_BYTES)
+        .clamp(MIN_WINDOW_BYTES, MAX_WINDOW_BYTES)
 }
 
 #[derive(Serialize)]
@@ -177,6 +244,7 @@ fn response_header(response: &Response, name: reqwest::header::HeaderName) -> Op
 
 fn request_media(
     template: &NativeMediaSourceTemplate,
+    client: &Client,
     method: &str,
     range: Option<String>,
     if_range: Option<String>,
@@ -191,14 +259,9 @@ fn request_media(
         access_grant: &template.access_grant,
         device_auth: &template.authorization,
     };
-    let mut request = template
-        .connector_client
+    let mut request = client
         .post(&template.connector_url)
         .header(reqwest::header::ACCEPT, "*/*");
-    // Il protocollo Connector incapsula HEAD dentro un POST. Chiudiamo soltanto
-    // questa connessione di metadata per evitare che l'HTTP client provi a
-    // riusare una risposta senza body ma con Content-Length del file. I Range
-    // GET successivi restano keep-alive e riusano il pool TLS.
     if method == "HEAD" {
         request = request.header(reqwest::header::CONNECTION, "close");
     }
@@ -209,7 +272,7 @@ fn request_media(
 }
 
 fn resolve_metadata(template: &NativeMediaSourceTemplate) -> Result<SourceMetadata, String> {
-    let response = request_media(template, "HEAD", None, None)?;
+    let response = request_media(template, &template.metadata_client, "HEAD", None, None)?;
     if response.status().is_redirection() || !response.status().is_success() {
         return Err(format!(
             "Il Connector ha rifiutato l'apertura NativeMediaSource con status {}.",
@@ -234,47 +297,112 @@ struct NativeMediaStream {
     size: u64,
     if_range: Option<String>,
     cache_start: u64,
-    cache: Vec<u8>,
+    cache: VecDeque<u8>,
+    generation: u64,
+    sequential_fetches: u64,
+    next_pool_slot: usize,
 }
 
 impl NativeMediaStream {
     fn open(template: NativeMediaSourceTemplate) -> Result<Self, String> {
         let metadata = resolve_metadata(&template)?;
         eprintln!(
-            "native_media_source event=open path={} size={} read_ahead_bytes={}",
-            template.path, metadata.size, template.read_ahead_bytes
+            "native_media_source event=open path={} size={} initial_range_bytes={} max_range_bytes={} window_bytes={} pool_size={}",
+            template.path,
+            metadata.size,
+            INITIAL_RANGE_BYTES,
+            template.max_range_bytes,
+            template.window_bytes,
+            MEDIA_POOL_SIZE,
         );
+        template
+            .metrics
+            .current_range_bytes
+            .store(INITIAL_RANGE_BYTES as u64, Ordering::Relaxed);
         Ok(Self {
             template,
             position: 0,
             size: metadata.size,
             if_range: metadata.if_range,
             cache_start: 0,
-            cache: Vec::new(),
+            cache: VecDeque::new(),
+            generation: 0,
+            sequential_fetches: 0,
+            next_pool_slot: 0,
         })
     }
 
+    fn cache_end(&self) -> u64 {
+        self.cache_start.saturating_add(self.cache.len() as u64)
+    }
+
     fn cached_offset(&self) -> Option<usize> {
-        if self.cache.is_empty() || self.position < self.cache_start {
+        if self.cache.is_empty() || self.position < self.cache_start || self.position >= self.cache_end() {
             return None;
         }
-        let offset = self.position.saturating_sub(self.cache_start) as usize;
-        (offset < self.cache.len()).then_some(offset)
+        Some(self.position.saturating_sub(self.cache_start) as usize)
+    }
+
+    fn offset_is_cached(&self, offset: u64) -> bool {
+        !self.cache.is_empty() && offset >= self.cache_start && offset < self.cache_end()
+    }
+
+    fn next_range_bytes(&self) -> usize {
+        let wanted = match self.sequential_fetches {
+            0 => INITIAL_RANGE_BYTES,
+            1 => MID_RANGE_BYTES,
+            _ => self.template.max_range_bytes,
+        };
+        wanted.min(self.template.max_range_bytes)
+    }
+
+    fn replace_or_append_cache(&mut self, start: u64, bytes: Vec<u8>) {
+        if self.cache.is_empty() || start != self.cache_end() {
+            self.cache.clear();
+            self.cache_start = start;
+        }
+        self.cache.extend(bytes);
+
+        if self.cache.len() > self.template.window_bytes {
+            let excess = self.cache.len() - self.template.window_bytes;
+            // Durante un fill sequenziale position coincide col vecchio cache_end,
+            // quindi tutti i byte prima di position sono sacrificabili. Non
+            // eliminiamo mai il byte corrente/futuro necessario a libmpv.
+            let safely_droppable = self.position.saturating_sub(self.cache_start) as usize;
+            let drop_count = excess.min(safely_droppable);
+            if drop_count > 0 {
+                drop(self.cache.drain(..drop_count));
+                self.cache_start = self.cache_start.saturating_add(drop_count as u64);
+            }
+        }
+        self.template
+            .metrics
+            .current_window_bytes
+            .store(self.cache.len() as u64, Ordering::Relaxed);
     }
 
     fn fetch_range(&mut self) -> Result<(), String> {
         if self.position >= self.size {
             self.cache.clear();
+            self.template
+                .metrics
+                .current_window_bytes
+                .store(0, Ordering::Relaxed);
             return Ok(());
         }
+
         let start = self.position;
+        let range_bytes = self.next_range_bytes();
         let end = start
-            .saturating_add(self.template.read_ahead_bytes as u64)
+            .saturating_add(range_bytes as u64)
             .saturating_sub(1)
             .min(self.size - 1);
         let expected = end - start + 1;
         let range = format!("bytes={start}-{end}");
+        let pool_slot = self.next_pool_slot;
+        self.next_pool_slot = (self.next_pool_slot + 1) % MEDIA_POOL_SIZE;
         let started = Instant::now();
+
         self.template
             .metrics
             .remote_requests
@@ -284,14 +412,34 @@ impl NativeMediaStream {
             .bytes_requested
             .fetch_add(expected, Ordering::Relaxed);
         self.template.metrics.cache_misses.fetch_add(1, Ordering::Relaxed);
+        self.template
+            .metrics
+            .current_range_bytes
+            .store(expected, Ordering::Relaxed);
+        match pool_slot {
+            0 => {
+                self.template
+                    .metrics
+                    .pool_slot_0_requests
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {
+                self.template
+                    .metrics
+                    .pool_slot_1_requests
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
 
+        let client = self.template.media_clients[pool_slot].clone();
         let response = request_media(
             &self.template,
+            &client,
             "GET",
             Some(range),
             self.if_range.clone(),
         );
-        let mut response = match response {
+        let response = match response {
             Ok(value) => value,
             Err(error) => {
                 self.template.metrics.errors.fetch_add(1, Ordering::Relaxed);
@@ -334,6 +482,9 @@ impl NativeMediaStream {
             ));
         }
 
+        // Importante: consumiamo SEMPRE interamente il Range bounded. In questo
+        // modo la connessione HTTP/TLS può tornare nel pool e non viene abortita
+        // quando mpv cambia posizione. Il seek successivo partirà da 1 MiB.
         let mut bytes = Vec::with_capacity(expected as usize);
         response
             .take(expected.saturating_add(1))
@@ -358,38 +509,54 @@ impl NativeMediaStream {
             .metrics
             .last_range_elapsed_ms
             .store(elapsed_ms, Ordering::Relaxed);
+        self.template
+            .metrics
+            .last_range_bytes
+            .store(expected, Ordering::Relaxed);
         self.template.metrics.has_last_range.store(true, Ordering::Relaxed);
+
+        self.replace_or_append_cache(start, bytes);
+        self.sequential_fetches = self.sequential_fetches.saturating_add(1);
+        self.template
+            .metrics
+            .sequential_fetches
+            .store(self.sequential_fetches, Ordering::Relaxed);
+
         eprintln!(
-            "native_media_source event=range start={} end={} bytes={} elapsed_ms={}",
-            start, end, expected, elapsed_ms
+            "native_media_source event=range generation={} pool_slot={} requested_start={} requested_end={} requested_bytes={} bytes_received={} elapsed_ms={} sequential_fetches={} cache_start={} cache_end={} cache_window_bytes={}",
+            self.generation,
+            pool_slot,
+            start,
+            end,
+            expected,
+            expected,
+            elapsed_ms,
+            self.sequential_fetches,
+            self.cache_start,
+            self.cache_end(),
+            self.cache.len(),
         );
-        self.cache_start = start;
-        self.cache = bytes;
         Ok(())
     }
 
-    fn read_into(&mut self, target: &mut [u8], cancelled: &AtomicBool) -> Result<usize, String> {
+    fn read_into(&mut self, target: &mut [u8]) -> Result<usize, String> {
         if target.is_empty() || self.position >= self.size {
             return Ok(0);
-        }
-        if cancelled.load(Ordering::Relaxed) {
-            return Err("NativeMediaSource cancellata.".to_string());
         }
         if self.cached_offset().is_none() {
             self.fetch_range()?;
         } else {
             self.template.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
         }
-        if cancelled.load(Ordering::Relaxed) {
-            return Err("NativeMediaSource cancellata.".to_string());
-        }
+
         let Some(offset) = self.cached_offset() else {
             return Ok(0);
         };
         let available = self.cache.len().saturating_sub(offset);
         let remaining = self.size.saturating_sub(self.position) as usize;
         let count = target.len().min(available).min(remaining);
-        target[..count].copy_from_slice(&self.cache[offset..offset + count]);
+        let contiguous = self.cache.make_contiguous();
+        target[..count].copy_from_slice(&contiguous[offset..offset + count]);
         self.position = self.position.saturating_add(count as u64);
         self.template
             .metrics
@@ -398,23 +565,55 @@ impl NativeMediaStream {
         Ok(count)
     }
 
-    fn seek(&mut self, offset: i64, cancelled: &AtomicBool) -> Result<i64, String> {
-        if cancelled.load(Ordering::Relaxed) {
-            return Err("NativeMediaSource cancellata.".to_string());
-        }
+    fn seek(&mut self, offset: i64) -> Result<i64, String> {
         if offset < 0 || offset as u64 > self.size {
             return Err("Seek NativeMediaSource fuori dal file.".to_string());
         }
-        self.position = offset as u64;
+        let offset = offset as u64;
+        let cache_hit = self.offset_is_cached(offset);
+        self.position = offset;
         self.template.metrics.seeks.fetch_add(1, Ordering::Relaxed);
-        eprintln!("native_media_source event=seek offset={offset}");
-        Ok(offset)
+
+        if cache_hit {
+            self.template
+                .metrics
+                .cache_seek_hits
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.generation = self.generation.saturating_add(1);
+            self.sequential_fetches = 0;
+            self.cache.clear();
+            self.cache_start = offset;
+            self.template
+                .metrics
+                .generation
+                .store(self.generation, Ordering::Relaxed);
+            self.template
+                .metrics
+                .sequential_fetches
+                .store(0, Ordering::Relaxed);
+            self.template
+                .metrics
+                .current_range_bytes
+                .store(INITIAL_RANGE_BYTES as u64, Ordering::Relaxed);
+            self.template
+                .metrics
+                .current_window_bytes
+                .store(0, Ordering::Relaxed);
+        }
+        eprintln!(
+            "native_media_source event=seek offset={} cache_hit={} generation={} next_range_bytes={}",
+            offset,
+            cache_hit,
+            self.generation,
+            self.next_range_bytes(),
+        );
+        Ok(offset as i64)
     }
 }
 
 struct StreamCookie {
     stream: Mutex<NativeMediaStream>,
-    cancelled: AtomicBool,
 }
 
 #[repr(C)]
@@ -512,14 +711,17 @@ pub unsafe extern "C" fn stream_open_callback(
         let stream = NativeMediaStream::open(template)?;
         let cookie = Box::new(StreamCookie {
             stream: Mutex::new(stream),
-            cancelled: AtomicBool::new(false),
         });
         (*info).cookie = Box::into_raw(cookie).cast::<c_void>();
         (*info).read_fn = Some(stream_read_callback);
         (*info).seek_fn = Some(stream_seek_callback);
         (*info).size_fn = Some(stream_size_callback);
         (*info).close_fn = Some(stream_close_callback);
-        (*info).cancel_fn = Some(stream_cancel_callback);
+
+        // Deliberatamente NULL: secondo la stream_cb API di mpv cancel_fn deve
+        // interrompere letture/seek correnti E futuri. Per i nostri Range
+        // bounded usarlo come "latest seek wins" ricreerebbe il churn V6.
+        (*info).cancel_fn = None;
         Ok(())
     }));
     match result {
@@ -544,7 +746,7 @@ unsafe extern "C" fn stream_read_callback(
         let cookie = &*(cookie as *const StreamCookie);
         let length = usize::try_from(nbytes)
             .unwrap_or(usize::MAX)
-            .min(MAX_READ_AHEAD_BYTES);
+            .min(MAX_STREAM_READ_BYTES);
         if length == 0 {
             return Ok(0);
         }
@@ -553,9 +755,7 @@ unsafe extern "C" fn stream_read_callback(
             .stream
             .lock()
             .map_err(|_| "Stream NativeMediaSource non disponibile.".to_string())?;
-        stream
-            .read_into(target, &cookie.cancelled)
-            .map(|count| count as i64)
+        stream.read_into(target).map(|count| count as i64)
     }));
     match result {
         Ok(Ok(count)) => count,
@@ -577,7 +777,7 @@ unsafe extern "C" fn stream_seek_callback(cookie: *mut c_void, offset: i64) -> i
             .stream
             .lock()
             .map_err(|_| "Stream NativeMediaSource non disponibile.".to_string())?;
-        stream.seek(offset, &cookie.cancelled)
+        stream.seek(offset)
     }));
     match result {
         Ok(Ok(offset)) => offset,
@@ -607,27 +807,40 @@ unsafe extern "C" fn stream_size_callback(cookie: *mut c_void) -> i64 {
     }
 }
 
-unsafe extern "C" fn stream_cancel_callback(cookie: *mut c_void) {
-    if cookie.is_null() {
-        return;
-    }
-    let cookie = &*(cookie as *const StreamCookie);
-    cookie.cancelled.store(true, Ordering::Relaxed);
-}
-
 unsafe extern "C" fn stream_close_callback(cookie: *mut c_void) {
     if cookie.is_null() {
         return;
     }
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        drop(Box::from_raw(cookie as *mut StreamCookie));
-        eprintln!("native_media_source event=close");
+        let cookie = Box::from_raw(cookie as *mut StreamCookie);
+        if let Ok(stream) = cookie.stream.lock() {
+            let stats = stream.template.stats();
+            eprintln!(
+                "native_media_source event=close remote_requests={} bytes_requested={} bytes_received={} bytes_served_to_mpv={} cache_hits={} cache_misses={} cache_seek_hits={} seeks={} errors={} generation={} pool_slot_0_requests={} pool_slot_1_requests={}",
+                stats.remote_requests,
+                stats.bytes_requested,
+                stats.bytes_received,
+                stats.bytes_served,
+                stats.cache_hits,
+                stats.cache_misses,
+                stats.cache_seek_hits,
+                stats.seeks,
+                stats.errors,
+                stats.generation,
+                stats.pool_slot_0_requests,
+                stats.pool_slot_1_requests,
+            );
+        }
+        drop(cookie);
     }));
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{configured_read_ahead_bytes, parse_content_range};
+    use super::{
+        configured_max_range_bytes, configured_window_bytes, parse_content_range,
+        ABSOLUTE_MAX_RANGE_BYTES, INITIAL_RANGE_BYTES, MAX_WINDOW_BYTES, MIN_WINDOW_BYTES,
+    };
 
     #[test]
     fn parses_content_range() {
@@ -637,9 +850,16 @@ mod tests {
     }
 
     #[test]
-    fn default_read_ahead_is_bounded() {
-        let bytes = configured_read_ahead_bytes();
-        assert!(bytes >= 256 * 1024);
-        assert!(bytes <= 16 * 1024 * 1024);
+    fn adaptive_ranges_are_bounded() {
+        let bytes = configured_max_range_bytes();
+        assert!(bytes >= INITIAL_RANGE_BYTES);
+        assert!(bytes <= ABSOLUTE_MAX_RANGE_BYTES);
+    }
+
+    #[test]
+    fn sliding_window_is_bounded() {
+        let bytes = configured_window_bytes();
+        assert!(bytes >= MIN_WINDOW_BYTES);
+        assert!(bytes <= MAX_WINDOW_BYTES);
     }
 }

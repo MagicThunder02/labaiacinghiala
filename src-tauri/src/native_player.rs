@@ -163,6 +163,9 @@ pub struct NativePlaybackState {
     duration: Option<f64>,
     cache_duration: Option<f64>,
     cache_buffering_state: Option<f64>,
+    cache_speed: Option<f64>,
+    demuxer_cache_idle: bool,
+    demuxer_cache_state: Option<String>,
     hwdec_current: Option<String>,
     video_codec: Option<String>,
     audio_codec: Option<String>,
@@ -190,6 +193,9 @@ impl NativePlaybackState {
             duration: number_property("duration"),
             cache_duration: number_property("demuxer-cache-duration"),
             cache_buffering_state: number_property("cache-buffering-state"),
+            cache_speed: number_property("cache-speed"),
+            demuxer_cache_idle: bool_property("demuxer-cache-idle"),
+            demuxer_cache_state: api.get_property(handle, "demuxer-cache-state"),
             hwdec_current: api.get_property(handle, "hwdec-current").filter(|value| !value.is_empty() && value != "no"),
             video_codec: api.get_property(handle, "video-codec"),
             audio_codec: api.get_property(handle, "audio-codec"),
@@ -488,8 +494,22 @@ fn player_worker(
         // mpv su win32 documenta wid come HWND convertito a uint32_t.
         let wid = native_window_handle as u32;
         api.set_option(handle, "wid", &wid.to_string())?;
+        // Profilo rete Baia: mpv resta responsabile della cache temporale e
+        // del demux read-ahead. NativeMediaSource si limita ad aggregare i
+        // piccoli read in Range bounded e a mantenere stabile il trasporto.
         api.set_option(handle, "cache", "yes")?;
+        api.set_option(handle, "cache-secs", "45")?;
+        api.set_option(handle, "cache-pause", "yes")?;
+        api.set_option(handle, "cache-pause-initial", "yes")?;
+        api.set_option(handle, "cache-pause-wait", "5")?;
+        api.set_option(handle, "demuxer-max-bytes", "64MiB")?;
+        api.set_option(handle, "demuxer-max-back-bytes", "32MiB")?;
         api.set_option(handle, "demuxer-seekable-cache", "yes")?;
+        api.set_option(handle, "demuxer-hysteresis-secs", "15")?;
+        api.set_option(handle, "stream-buffer-size", "2MiB")?;
+        // Il default mpv è molto breve; 5s evita chiusure forzate del custom
+        // stream mentre un Range bounded sta terminando.
+        api.set_option(handle, "demuxer-termination-timeout", "5")?;
         api.set_option(handle, "hwdec", "auto")?;
         let code = unsafe { (api.initialize)(handle) };
         api.check(code, "Impossibile inizializzare libmpv")?;
