@@ -3,6 +3,7 @@ mod connector_tls;
 mod core;
 mod identity;
 mod media_bridge;
+mod native_player;
 mod native_upload;
 mod pairing;
 mod relay_bridge;
@@ -45,6 +46,7 @@ pub fn run() {
             app.manage(state);
             app.manage(relay_bridge);
             app.manage(native_upload::NativeUploadState::default());
+            app.manage(native_player::NativePlayerState::default());
             app.manage(transport);
             app.manage(media_bridge);
             Ok(())
@@ -57,6 +59,9 @@ pub fn run() {
             auth::baia_core_authorize_request,
             auth::baia_core_authorize_media_url,
             media_bridge::baia_core_media_bridge_url,
+            native_player::baia_core_native_player_status,
+            native_player::baia_core_native_player_open,
+            native_player::baia_core_native_player_stop,
             transport::baia_core_api_request,
             identity::baia_core_device_identity,
             native_upload::baia_core_pick_upload_files,

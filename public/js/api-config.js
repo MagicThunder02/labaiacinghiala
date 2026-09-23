@@ -501,6 +501,41 @@
     return signed;
   }
 
+  async function nativeVideoPlayerStatus() {
+    await ready;
+    if (!isBundledAppFrontend()) {
+      return { enabled: false, available: false, backend: 'webview-legacy', version: null };
+    }
+    const tauriCore = getTauriCore();
+    if (!tauriCore?.invoke) {
+      return { enabled: false, available: false, backend: 'webview-legacy', version: null };
+    }
+    return tauriCore.invoke('baia_core_native_player_status');
+  }
+
+  async function tryOpenNativeVideoPlayer(movieId) {
+    const id = Number(movieId);
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      throw new Error('movieId non valido per il native player.');
+    }
+    const status = await nativeVideoPlayerStatus();
+    if (!status?.enabled) return { used: false, status };
+    if (!status.available) {
+      throw new Error('PoC native player abilitato, ma mpv non e disponibile sul client.');
+    }
+    const tauriCore = getTauriCore();
+    const launch = await tauriCore.invoke('baia_core_native_player_open', { movieId: id });
+    return { used: true, status, launch };
+  }
+
+  async function stopNativeVideoPlayer() {
+    await ready;
+    if (!isBundledAppFrontend()) return false;
+    const tauriCore = getTauriCore();
+    if (!tauriCore?.invoke) return false;
+    return tauriCore.invoke('baia_core_native_player_stop');
+  }
+
   window.BaiaApi = Object.freeze({
     url,
     getBaseUrl,
@@ -526,6 +561,9 @@
     releaseUploadFiles,
     uploadFilesNative,
     authorizeMediaUrl,
+    nativeVideoPlayerStatus,
+    tryOpenNativeVideoPlayer,
+    stopNativeVideoPlayer,
     isTauri: isBundledAppFrontend,
     storageKey: STORAGE_KEY,
   });

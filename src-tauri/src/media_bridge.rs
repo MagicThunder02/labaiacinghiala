@@ -201,6 +201,13 @@ impl MediaBridge {
         Ok(client)
     }
 
+    pub(crate) fn register_movie_stream(&self, movie_id: u64, state: &CoreState) -> Result<String, String> {
+        if movie_id == 0 {
+            return Err("movieId non valido per il ponte media.".to_string());
+        }
+        self.register_media_stream(&format!("/api/movies/{movie_id}/stream"), state)
+    }
+
     fn register_media_stream(&self, path: &str, state: &CoreState) -> Result<String, String> {
         let path = normalize_media_stream_path(path)?;
         let (connector_endpoint, server_fingerprint) = state.connector_context()?;

@@ -963,6 +963,15 @@ function saveProgressOnPageExit() {
 async function startPlayback(episode, { restart = false } = {}) {
   if (!episode) return;
 
+  // Fase 1 roadmap: quando il flag esplicito e attivo, il Core Rust apre
+  // lo stesso media in una finestra mpv esterna. Con flag false il flusso
+  // legacy WebView <video> qui sotto resta invariato.
+  const nativePoc = await window.BaiaApi.tryOpenNativeVideoPlayer(episode.id);
+  if (nativePoc.used) {
+    window.BaiaPage.shellToast('PoC mpv avviato in una finestra separata.');
+    return;
+  }
+
   const requestId = ++state.playbackRequestId;
   state.playbackGateOpen = false;
   const introPromise = Promise.resolve(window.BaiaPage.shellPlaybackIntro?.()).catch((error) => {
