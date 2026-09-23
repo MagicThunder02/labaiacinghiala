@@ -11,12 +11,12 @@ use std::{
     io::{BufRead, BufReader, ErrorKind, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{sync_channel, Receiver, SyncSender},
-        Arc, Condvar, Mutex,
+        Arc, Mutex,
     },
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::State;
 use uuid::Uuid;
@@ -31,8 +31,6 @@ const MAX_REQUESTS_PER_CONNECTION: usize = 200;
 const CONNECTOR_MEDIA_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
 const VIDEO_PIPE_BUFFER_BYTES: usize = 256 * 1024;
 const VIDEO_PIPE_BUFFER_SLOTS: usize = 16;
-const MAX_CONCURRENT_VIDEO_REQUESTS: usize = 2;
-const VIDEO_LANE_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 const BRIDGE_HEADER: &str = "X-Baia-Media-Bridge";
 const BRIDGE_HEADER_VALUE: &str = "media-v1";
 // Tauri's webview origin differs by platform: Windows and Android serve the
@@ -53,60 +51,69 @@ struct CachedMediaConnectorClient {
     client: Client,
 }
 
-struct VideoLaneLimiter {
-    active: Mutex<usize>,
-    available: Condvar,
+struct VideoStreamCoordinator {
+    generations: Mutex<HashMap<String, u64>>,
 }
 
-impl VideoLaneLimiter {
+impl VideoStreamCoordinator {
     fn new() -> Self {
         Self {
-            active: Mutex::new(0),
-            available: Condvar::new(),
+            generations: Mutex::new(HashMap::new()),
         }
     }
 
-    fn acquire(self: &Arc<Self>) -> Result<VideoLanePermit, String> {
-        let started = Instant::now();
-        let mut active = self
-            .active
+    fn begin(self: &Arc<Self>, media_key: &str) -> Result<VideoStreamTicket, String> {
+        let mut generations = self
+            .generations
             .lock()
-            .map_err(|_| "Limiter video del Media Bridge non disponibile.".to_string())?;
-        loop {
-            if *active < MAX_CONCURRENT_VIDEO_REQUESTS {
-                *active += 1;
-                return Ok(VideoLanePermit {
-                    limiter: Arc::clone(self),
-                });
-            }
-            let elapsed = started.elapsed();
-            if elapsed >= VIDEO_LANE_WAIT_TIMEOUT {
-                return Err("Timeout in attesa di una lane video del Media Bridge.".to_string());
-            }
-            let remaining = VIDEO_LANE_WAIT_TIMEOUT - elapsed;
-            let (next, timeout) = self
-                .available
-                .wait_timeout(active, remaining)
-                .map_err(|_| "Limiter video del Media Bridge non disponibile.".to_string())?;
-            active = next;
-            if timeout.timed_out() && *active >= MAX_CONCURRENT_VIDEO_REQUESTS {
-                return Err("Timeout in attesa di una lane video del Media Bridge.".to_string());
-            }
-        }
+            .map_err(|_| "Coordinatore video del Media Bridge non disponibile.".to_string())?;
+        let generation = generations
+            .entry(media_key.to_string())
+            .and_modify(|value| *value = value.wrapping_add(1).max(1))
+            .or_insert(1);
+        Ok(VideoStreamTicket {
+            coordinator: Arc::clone(self),
+            media_key: media_key.to_string(),
+            generation: *generation,
+            range_id: Uuid::new_v4().to_string(),
+        })
+    }
+
+    fn is_current(&self, media_key: &str, generation: u64) -> bool {
+        self.generations
+            .lock()
+            .ok()
+            .and_then(|generations| generations.get(media_key).copied())
+            == Some(generation)
     }
 }
 
-struct VideoLanePermit {
-    limiter: Arc<VideoLaneLimiter>,
+#[derive(Clone)]
+struct VideoStreamTicket {
+    coordinator: Arc<VideoStreamCoordinator>,
+    media_key: String,
+    generation: u64,
+    range_id: String,
 }
 
-impl Drop for VideoLanePermit {
-    fn drop(&mut self) {
-        if let Ok(mut active) = self.limiter.active.lock() {
-            *active = (*active).saturating_sub(1);
-            self.limiter.available.notify_one();
-        }
+impl VideoStreamTicket {
+    fn is_current(&self) -> bool {
+        self.coordinator
+            .is_current(&self.media_key, self.generation)
     }
+}
+
+#[derive(Default)]
+struct VideoTransferStats {
+    bytes_from_connector: AtomicU64,
+    bytes_to_webview: AtomicU64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VideoStreamOutcome {
+    Complete,
+    Superseded,
+    ClientDisconnected,
 }
 
 #[derive(Clone)]
@@ -116,7 +123,7 @@ struct BridgeRoute {
     access_grant: String,
     connector_url: String,
     connector_client: Client,
-    video_limiter: Arc<VideoLaneLimiter>,
+    video_coordinator: Arc<VideoStreamCoordinator>,
     expires: u64,
 }
 
@@ -139,7 +146,7 @@ pub struct MediaBridge {
     address: SocketAddr,
     routes: Arc<Mutex<HashMap<String, BridgeRoute>>>,
     connector_client: Mutex<Option<CachedMediaConnectorClient>>,
-    video_limiter: Arc<VideoLaneLimiter>,
+    video_coordinator: Arc<VideoStreamCoordinator>,
     shutdown: Arc<AtomicBool>,
 }
 
@@ -151,7 +158,7 @@ impl MediaBridge {
             .local_addr()
             .map_err(|error| format!("Impossibile leggere la porta del ponte media: {error}"))?;
         let routes = Arc::new(Mutex::new(HashMap::new()));
-        let video_limiter = Arc::new(VideoLaneLimiter::new());
+        let video_coordinator = Arc::new(VideoStreamCoordinator::new());
         let shutdown = Arc::new(AtomicBool::new(false));
         let worker_routes = Arc::clone(&routes);
         let worker_shutdown = Arc::clone(&shutdown);
@@ -165,7 +172,7 @@ impl MediaBridge {
             address,
             routes,
             connector_client: Mutex::new(None),
-            video_limiter,
+            video_coordinator,
             shutdown,
         })
     }
@@ -219,7 +226,7 @@ impl MediaBridge {
                 access_grant,
                 connector_url,
                 connector_client,
-                video_limiter: Arc::clone(&self.video_limiter),
+                video_coordinator: Arc::clone(&self.video_coordinator),
                 expires,
             },
         );
@@ -417,22 +424,6 @@ fn handle_connection(
             return write_error(&mut stream, 410, "Gone");
         };
 
-        // Bound *local video Range streams*, not individual HTTP segments. A
-        // permit therefore stays with this WebView request across all of its
-        // sequential Connector segments. This prevents many overlapping Range
-        // workers from taking turns on the pool and recreating TLS churn.
-        let _video_lane = if is_video_stream_path(&route.path) {
-            match route.video_limiter.acquire() {
-                Ok(permit) => Some(permit),
-                Err(error) => {
-                    eprintln!("Media Bridge video lane non disponibile: {error}");
-                    return write_error(&mut stream, 503, "Service Unavailable");
-                }
-            }
-        } else {
-            None
-        };
-
         let keep_alive = !connection_close && request_index < MAX_REQUESTS_PER_CONNECTION;
         let chunkable_range = if method == Method::GET && is_video_stream_path(&route.path) {
             range.as_deref().and_then(parse_chunkable_range)
@@ -441,6 +432,19 @@ fn handle_connection(
         };
 
         if let Some(requested) = chunkable_range {
+            // V6: a newly requested long Range for the same logical video
+            // immediately supersedes the previous long Range. Small probe
+            // ranges do not enter this coordinator and remain independent.
+            let video_ticket = route.video_coordinator.begin(&route.path)?;
+            eprintln!(
+                "video_range_id={} event=begin requested_start={} requested_end={}",
+                video_ticket.range_id,
+                requested.start,
+                requested
+                    .end
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "open".to_string())
+            );
             let first_end = requested
                 .end
                 .unwrap_or_else(|| requested.start.saturating_add(CONNECTOR_MEDIA_CHUNK_BYTES - 1))
@@ -485,7 +489,7 @@ fn handle_connection(
                     return write_error(&mut stream, 502, "Bad Gateway");
                 }
 
-                if let Err(error) = stream_segmented_video_response(
+                match stream_segmented_video_response(
                     &mut stream,
                     &route,
                     response,
@@ -494,17 +498,21 @@ fn handle_connection(
                     content_range.total,
                     if_range.clone(),
                     keep_alive,
-                ) {
-                    if is_client_disconnect_message(&error) {
+                    video_ticket,
+                )? {
+                    VideoStreamOutcome::Complete => {
+                        stream.flush().ok();
+                        if !keep_alive {
+                            return Ok(());
+                        }
+                        continue;
+                    }
+                    VideoStreamOutcome::Superseded | VideoStreamOutcome::ClientDisconnected => {
+                        // Drop the local socket with an incomplete body. The
+                        // WebView has already moved on (seek) or disconnected.
                         return Ok(());
                     }
-                    return Err(error);
                 }
-                stream.flush().ok();
-                if !keep_alive {
-                    return Ok(());
-                }
-                continue;
             }
 
             // If If-Range does not match, HTTP semantics allow the upstream to
@@ -513,23 +521,42 @@ fn handle_connection(
             if response.status().is_redirection() {
                 return write_error(&mut stream, 502, "Bad Gateway");
             }
+            if !video_ticket.is_current() {
+                return Ok(());
+            }
             if let Err(error) = write_status_and_headers(&mut stream, &response, keep_alive) {
                 if is_client_disconnect_message(&error) {
                     return Ok(());
                 }
                 return Err(error);
             }
-            if let Err(error) = std::io::copy(&mut response, &mut stream) {
-                if !is_client_disconnect(&error) {
-                    return Err(format!("Streaming dal ponte media interrotto: {error}"));
+            let stats = VideoTransferStats::default();
+            let outcome = copy_video_response_cancelable(
+                &mut response,
+                &mut stream,
+                &video_ticket,
+                &stats,
+            )?;
+            log_video_transfer(
+                &video_ticket,
+                outcome,
+                &stats,
+                1,
+                requested.start,
+                requested.end,
+            );
+            match outcome {
+                VideoStreamOutcome::Complete => {
+                    stream.flush().ok();
+                    if !keep_alive {
+                        return Ok(());
+                    }
+                    continue;
                 }
-                return Ok(());
+                VideoStreamOutcome::Superseded | VideoStreamOutcome::ClientDisconnected => {
+                    return Ok(());
+                }
             }
-            stream.flush().ok();
-            if !keep_alive {
-                return Ok(());
-            }
-            continue;
         }
 
         let mut response = match send_connector_media_request(
@@ -551,7 +578,6 @@ fn handle_connection(
 
         if let Err(error) = write_status_and_headers(&mut stream, &response, keep_alive) {
             if is_client_disconnect_message(&error) {
-                drain_bounded_video_response_on_disconnect(&route, &mut response);
                 return Ok(());
             }
             return Err(error);
@@ -561,7 +587,6 @@ fn handle_connection(
                 if !is_client_disconnect(&error) {
                     return Err(format!("Streaming dal ponte media interrotto: {error}"));
                 }
-                drain_bounded_video_response_on_disconnect(&route, &mut response);
                 return Ok(());
             }
         }
@@ -756,48 +781,111 @@ fn write_segmented_status_and_headers(
     Ok(())
 }
 
-fn drain_connector_response(response: &mut reqwest::blocking::Response) {
-    let _ = std::io::copy(response, &mut std::io::sink());
+fn video_outcome_name(outcome: VideoStreamOutcome) -> &'static str {
+    match outcome {
+        VideoStreamOutcome::Complete => "complete",
+        VideoStreamOutcome::Superseded => "superseded",
+        VideoStreamOutcome::ClientDisconnected => "client_disconnected",
+    }
 }
 
-fn drain_bounded_video_response_on_disconnect(
-    route: &BridgeRoute,
-    response: &mut reqwest::blocking::Response,
+fn log_video_transfer(
+    ticket: &VideoStreamTicket,
+    outcome: VideoStreamOutcome,
+    stats: &VideoTransferStats,
+    segment_count: u64,
+    requested_start: u64,
+    requested_end: Option<u64>,
 ) {
-    if !is_video_stream_path(&route.path) {
-        return;
+    let bytes_from_connector = stats.bytes_from_connector.load(Ordering::Relaxed);
+    let bytes_to_webview = stats.bytes_to_webview.load(Ordering::Relaxed);
+    let bytes_discarded = bytes_from_connector.saturating_sub(bytes_to_webview);
+    eprintln!(
+        "video_range_id={} event=end result={} requested_start={} requested_end={} segment_count={} bytes_from_connector={} bytes_to_webview={} bytes_discarded={}",
+        ticket.range_id,
+        video_outcome_name(outcome),
+        requested_start,
+        requested_end
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "open".to_string()),
+        segment_count,
+        bytes_from_connector,
+        bytes_to_webview,
+        bytes_discarded,
+    );
+}
+
+fn copy_video_response_cancelable(
+    response: &mut reqwest::blocking::Response,
+    stream: &mut TcpStream,
+    ticket: &VideoStreamTicket,
+    stats: &VideoTransferStats,
+) -> Result<VideoStreamOutcome, String> {
+    loop {
+        if !ticket.is_current() {
+            return Ok(VideoStreamOutcome::Superseded);
+        }
+        let mut buffer = vec![0u8; VIDEO_PIPE_BUFFER_BYTES];
+        let read = response
+            .read(&mut buffer)
+            .map_err(|error| format!("Lettura media dal Connector fallita: {error}"))?;
+        if read == 0 {
+            return Ok(VideoStreamOutcome::Complete);
+        }
+        stats
+            .bytes_from_connector
+            .fetch_add(read as u64, Ordering::Relaxed);
+        if !ticket.is_current() {
+            return Ok(VideoStreamOutcome::Superseded);
+        }
+        if let Err(error) = stream.write_all(&buffer[..read]) {
+            if is_client_disconnect(&error) {
+                return Ok(VideoStreamOutcome::ClientDisconnected);
+            }
+            return Err(format!("Streaming locale del video interrotto: {error}"));
+        }
+        stats
+            .bytes_to_webview
+            .fetch_add(read as u64, Ordering::Relaxed);
     }
-    let bounded = response
-        .headers()
-        .get(reqwest::header::CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(|length| length <= CONNECTOR_MEDIA_CHUNK_BYTES)
-        .unwrap_or(false);
-    if bounded {
-        drain_connector_response(response);
-    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VideoProducerOutcome {
+    Complete,
+    Superseded,
+    ReceiverClosed,
 }
 
 fn send_response_body_to_pipe(
     response: &mut reqwest::blocking::Response,
     sender: &SyncSender<Vec<u8>>,
-) -> Result<bool, String> {
+    ticket: &VideoStreamTicket,
+    stats: &VideoTransferStats,
+) -> Result<VideoProducerOutcome, String> {
     loop {
+        if !ticket.is_current() {
+            return Ok(VideoProducerOutcome::Superseded);
+        }
         let mut chunk = vec![0u8; VIDEO_PIPE_BUFFER_BYTES];
         let read = response
             .read(&mut chunk)
             .map_err(|error| format!("Lettura segmento media dal Connector fallita: {error}"))?;
         if read == 0 {
-            return Ok(true);
+            return Ok(VideoProducerOutcome::Complete);
         }
+        stats
+            .bytes_from_connector
+            .fetch_add(read as u64, Ordering::Relaxed);
         chunk.truncate(read);
+        if !ticket.is_current() {
+            return Ok(VideoProducerOutcome::Superseded);
+        }
         if sender.send(chunk).is_err() {
-            // The WebView abandoned this local response (typically because of
-            // a seek). Finish consuming only the current bounded remote
-            // segment so reqwest can return its TLS connection to the pool.
-            drain_connector_response(response);
-            return Ok(false);
+            // The local writer has stopped because the request was superseded
+            // or the WebView disconnected. Do not drain the remote response:
+            // V6 prioritizes the new useful Range over preserving this TLS.
+            return Ok(VideoProducerOutcome::ReceiverClosed);
         }
     }
 }
@@ -805,19 +893,31 @@ fn send_response_body_to_pipe(
 fn write_video_pipe(
     mut stream: TcpStream,
     receiver: Receiver<Vec<u8>>,
-) -> Result<(), String> {
+    ticket: VideoStreamTicket,
+    stats: Arc<VideoTransferStats>,
+) -> Result<VideoStreamOutcome, String> {
     while let Ok(chunk) = receiver.recv() {
+        if !ticket.is_current() {
+            return Ok(VideoStreamOutcome::Superseded);
+        }
         if let Err(error) = stream.write_all(&chunk) {
             if is_client_disconnect(&error) {
-                return Err(format!("client disconnect: {error}"));
+                return Ok(VideoStreamOutcome::ClientDisconnected);
             }
             return Err(format!("Streaming locale del video interrotto: {error}"));
         }
+        stats
+            .bytes_to_webview
+            .fetch_add(chunk.len() as u64, Ordering::Relaxed);
     }
-    stream
-        .flush()
-        .map_err(|error| format!("Flush locale del video fallito: {error}"))?;
-    Ok(())
+    if !ticket.is_current() {
+        return Ok(VideoStreamOutcome::Superseded);
+    }
+    match stream.flush() {
+        Ok(()) => Ok(VideoStreamOutcome::Complete),
+        Err(error) if is_client_disconnect(&error) => Ok(VideoStreamOutcome::ClientDisconnected),
+        Err(error) => Err(format!("Flush locale del video fallito: {error}")),
+    }
 }
 
 fn stream_segmented_video_response(
@@ -829,7 +929,9 @@ fn stream_segmented_video_response(
     total: u64,
     if_range: Option<String>,
     keep_alive: bool,
-) -> Result<(), String> {
+    ticket: VideoStreamTicket,
+) -> Result<VideoStreamOutcome, String> {
+    let stats = Arc::new(VideoTransferStats::default());
     let first_content_range = first_response
         .headers()
         .get(reqwest::header::CONTENT_RANGE)
@@ -846,6 +948,12 @@ fn stream_segmented_video_response(
         etag.as_deref(),
         last_modified.as_deref(),
     )?;
+
+    if !ticket.is_current() {
+        let outcome = VideoStreamOutcome::Superseded;
+        log_video_transfer(&ticket, outcome, &stats, 1, start, Some(end));
+        return Ok(outcome);
+    }
     if let Err(error) = write_segmented_status_and_headers(
         stream,
         &first_response,
@@ -855,34 +963,46 @@ fn stream_segmented_video_response(
         keep_alive,
     ) {
         if is_client_disconnect_message(&error) {
-            drain_connector_response(&mut first_response);
+            let outcome = VideoStreamOutcome::ClientDisconnected;
+            log_video_transfer(&ticket, outcome, &stats, 1, start, Some(end));
+            return Ok(outcome);
         }
         return Err(error);
     }
 
-    // A small bounded queue lets the Connector stay a few MiB ahead of the
-    // WebView without buffering an entire Range (or even an entire segment).
-    // The writer owns a cloned loopback socket; this thread remains the sole
-    // owner of the remote responses and can therefore drain a cancelled
-    // bounded segment before releasing its TLS lane.
+    // Keep only a small bounded prefetch window. A newly requested long Range
+    // for the same media invalidates this ticket; producer and writer both
+    // observe that generation and stop without draining obsolete remote bytes.
     let writer_stream = stream
         .try_clone()
         .map_err(|error| format!("Impossibile clonare il socket locale video: {error}"))?;
     let (sender, receiver) = sync_channel::<Vec<u8>>(VIDEO_PIPE_BUFFER_SLOTS);
+    let writer_ticket = ticket.clone();
+    let writer_stats = Arc::clone(&stats);
     let writer = thread::Builder::new()
         .name("baia-media-video-writer".to_string())
-        .spawn(move || write_video_pipe(writer_stream, receiver))
+        .spawn(move || write_video_pipe(writer_stream, receiver, writer_ticket, writer_stats))
         .map_err(|error| format!("Impossibile avviare il writer video locale: {error}"))?;
 
     let mut current_start = first_content_range.start;
     let mut current_end = first_content_range.end;
     let mut response = first_response;
+    let mut segment_count = 1u64;
     let mut producer_error: Option<String> = None;
+    let mut producer_outcome = VideoProducerOutcome::Complete;
 
     loop {
-        match send_response_body_to_pipe(&mut response, &sender) {
-            Ok(true) => {}
-            Ok(false) => break,
+        if !ticket.is_current() {
+            producer_outcome = VideoProducerOutcome::Superseded;
+            break;
+        }
+        match send_response_body_to_pipe(&mut response, &sender, &ticket, &stats) {
+            Ok(VideoProducerOutcome::Complete) => {}
+            Ok(outcome @ VideoProducerOutcome::Superseded)
+            | Ok(outcome @ VideoProducerOutcome::ReceiverClosed) => {
+                producer_outcome = outcome;
+                break;
+            }
             Err(error) => {
                 producer_error = Some(error);
                 break;
@@ -891,6 +1011,10 @@ fn stream_segmented_video_response(
         drop(response);
 
         if current_end >= end {
+            break;
+        }
+        if !ticket.is_current() {
+            producer_outcome = VideoProducerOutcome::Superseded;
             break;
         }
         current_start = current_end.saturating_add(1);
@@ -910,6 +1034,7 @@ fn stream_segmented_video_response(
                 break;
             }
         };
+        segment_count = segment_count.saturating_add(1);
         if next.status().is_redirection() {
             producer_error = Some(
                 "Redirect Connector non consentito durante streaming segmentato.".to_string(),
@@ -930,22 +1055,39 @@ fn stream_segmented_video_response(
         response = next;
     }
 
+    // Let any unfinished response drop when this function returns. We do not
+    // drain it: a superseded seek may sacrifice that one TLS connection, but
+    // immediately releases bandwidth for the newest useful Range.
     drop(sender);
     let writer_result = writer
         .join()
         .map_err(|_| "Writer video locale terminato in modo inatteso.".to_string())?;
 
-    if let Some(error) = producer_error {
-        // A client disconnect wins over an upstream error because it is the
-        // normal mechanism used by the WebView to abandon an obsolete Range.
-        if let Err(writer_error) = &writer_result {
-            if is_client_disconnect_message(writer_error) {
-                return Err(writer_error.clone());
+    let outcome = match writer_result {
+        Ok(VideoStreamOutcome::Superseded) => VideoStreamOutcome::Superseded,
+        Ok(VideoStreamOutcome::ClientDisconnected) => VideoStreamOutcome::ClientDisconnected,
+        Ok(VideoStreamOutcome::Complete) => match producer_outcome {
+            VideoProducerOutcome::Complete => VideoStreamOutcome::Complete,
+            VideoProducerOutcome::Superseded => VideoStreamOutcome::Superseded,
+            VideoProducerOutcome::ReceiverClosed => VideoStreamOutcome::ClientDisconnected,
+        },
+        Err(error) => {
+            if let Some(producer_error) = producer_error.as_ref() {
+                return Err(format!("{producer_error}; writer locale: {error}"));
             }
+            return Err(error);
+        }
+    };
+
+    log_video_transfer(&ticket, outcome, &stats, segment_count, start, Some(end));
+
+    if let Some(error) = producer_error {
+        if matches!(outcome, VideoStreamOutcome::Superseded | VideoStreamOutcome::ClientDisconnected) {
+            return Ok(outcome);
         }
         return Err(error);
     }
-    writer_result
+    Ok(outcome)
 }
 
 fn read_limited_line<R: BufRead>(reader: &mut R, target: &mut String, limit: usize) -> Result<(), String> {
@@ -1105,7 +1247,8 @@ pub fn baia_core_media_bridge_url(
 mod tests {
     use super::{
         bridge_token, normalize_media_stream_path, parse_chunkable_range, parse_content_range,
-        parse_request_line, ChunkableRange, ParsedContentRange, CONNECTOR_MEDIA_CHUNK_BYTES,
+        parse_request_line, ChunkableRange, ParsedContentRange, VideoStreamCoordinator,
+        CONNECTOR_MEDIA_CHUNK_BYTES,
     };
     use reqwest::Method;
 
@@ -1200,6 +1343,21 @@ mod tests {
         assert_eq!(parse_chunkable_range("bytes=-1024"), None);
         assert_eq!(parse_chunkable_range("bytes=0-10,20-30"), None);
         assert_eq!(parse_chunkable_range("bytes=20-10"), None);
+    }
+
+
+    #[test]
+    fn latest_long_video_range_supersedes_only_the_same_media() {
+        let coordinator = std::sync::Arc::new(VideoStreamCoordinator::new());
+        let first = coordinator.begin("/api/movies/12/stream").unwrap();
+        let other = coordinator.begin("/api/movies/13/stream").unwrap();
+        assert!(first.is_current());
+        assert!(other.is_current());
+
+        let second = coordinator.begin("/api/movies/12/stream").unwrap();
+        assert!(!first.is_current());
+        assert!(second.is_current());
+        assert!(other.is_current());
     }
 
     #[test]
