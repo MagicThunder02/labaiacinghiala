@@ -91,7 +91,7 @@ test('Host Connector espone health v1 senza SQLite e limita il filesystem al dir
 test('Fase 4A.4 instrada il Media Bridge solo nel canale media del Connector configurato', () => {
   assert.match(connectorTls, /MEDIA_PATH: &str = "\/baia\/v1\/media"/);
   assert.match(mediaBridge, /connector_url\(&connector_endpoint, connector_tls::MEDIA_PATH\)/);
-  assert.match(mediaBridge, /connector_client[\s\S]{0,80}\.post\(&connector_url\)/);
+  assert.match(mediaBridge, /route[\s\S]{0,120}connector_client[\s\S]{0,120}\.post\(&route\.connector_url\)/);
   assert.doesNotMatch(mediaBridge, /upstream_url:\s*String/);
   assert.match(auth, /struct MediaAuthorization/);
 });
@@ -121,14 +121,16 @@ test('streaming media usa keep-alive bounded sul TLS e sul Media Bridge locale',
   assert.match(mediaBridge, /for request_index in 1\.\.=MAX_REQUESTS_PER_CONNECTION/);
 });
 
-test('Media Bridge condivide il pool TLS e limita il keep-alive remoto al solo video', () => {
+test('Media Bridge condivide il pool TLS, segmenta solo grandi Range video e chiude le risorse non-video', () => {
   assert.match(mediaBridge, /struct CachedMediaConnectorClient/);
   assert.match(mediaBridge, /connector_client: Mutex<Option<CachedMediaConnectorClient>>/);
   assert.match(mediaBridge, /fn client_for\(&self, server_fingerprint: &str\)/);
   assert.match(mediaBridge, /cached\.client\.clone\(\)/);
-  assert.match(mediaBridge, /let connector_keep_alive = is_video_stream_path\(&route\.path\)/);
-  assert.match(mediaBridge, /if !connector_keep_alive \{[\s\S]{0,160}CONNECTION, "close"/);
-  assert.doesNotMatch(mediaBridge, /CONNECTOR_MEDIA_CHUNK_BYTES|stream_segmented_video_response|ChunkableRange/);
+  assert.match(mediaBridge, /CONNECTOR_MEDIA_CHUNK_BYTES: u64 = 32 \* 1024 \* 1024/);
+  assert.match(mediaBridge, /method == Method::GET && is_video_stream_path\(&route\.path\)/);
+  assert.match(mediaBridge, /stream_segmented_video_response/);
+  assert.match(mediaBridge, /if !is_video_stream_path\(&route\.path\) \{[\s\S]{0,240}CONNECTION, "close"/);
+  assert.match(mediaBridge, /if start_text\.is_empty\(\) \{[\s\S]{0,200}return None/);
 });
 
 test('direct media data plane mantiene Node nel control plane e valida il filesystem', () => {

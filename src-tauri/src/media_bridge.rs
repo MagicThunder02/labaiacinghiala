@@ -27,6 +27,7 @@ const MAX_HEADER_LINE_BYTES: usize = 8192;
 const MAX_HEADER_COUNT: usize = 64;
 const KEEP_ALIVE_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REQUESTS_PER_CONNECTION: usize = 200;
+const CONNECTOR_MEDIA_CHUNK_BYTES: u64 = 32 * 1024 * 1024;
 const BRIDGE_HEADER: &str = "X-Baia-Media-Bridge";
 const BRIDGE_HEADER_VALUE: &str = "media-v1";
 // Tauri's webview origin differs by platform: Windows and Android serve the
@@ -284,10 +285,16 @@ fn handle_connection(
     let mut reader = BufReader::new(read_stream);
 
     for request_index in 1..=MAX_REQUESTS_PER_CONNECTION {
-        let _ = stream.set_read_timeout(Some(if request_index == 1 { Duration::from_secs(15) } else { KEEP_ALIVE_IDLE_TIMEOUT }));
+        let _ = stream.set_read_timeout(Some(if request_index == 1 {
+            Duration::from_secs(15)
+        } else {
+            KEEP_ALIVE_IDLE_TIMEOUT
+        }));
         let mut request_line = String::new();
         if let Err(error) = read_limited_line(&mut reader, &mut request_line, MAX_REQUEST_LINE_BYTES) {
-            if request_index > 1 { return Ok(()); }
+            if request_index > 1 {
+                return Ok(());
+            }
             return Err(error);
         }
         let (method, target) = parse_request_line(&request_line)?;
@@ -344,33 +351,111 @@ fn handle_connection(
             return write_error(&mut stream, 410, "Gone");
         };
 
-        let connector_keep_alive = is_video_stream_path(&route.path);
-        let BridgeRoute {
-            path,
-            authorization,
-            access_grant,
-            connector_url,
-            connector_client,
-            ..
-        } = route;
-        let frame = ConnectorMediaRequest {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: Uuid::new_v4().to_string(),
-            method: method.as_str().to_string(),
-            path,
-            range,
-            if_range,
-            access_grant,
-            device_auth: authorization,
+        let keep_alive = !connection_close && request_index < MAX_REQUESTS_PER_CONNECTION;
+        let chunkable_range = if method == Method::GET && is_video_stream_path(&route.path) {
+            range.as_deref().and_then(parse_chunkable_range)
+        } else {
+            None
         };
 
-        let mut request = connector_client
-            .post(&connector_url)
-            .header(reqwest::header::ACCEPT, "*/*");
-        if !connector_keep_alive {
-            request = request.header(reqwest::header::CONNECTION, "close");
+        if let Some(requested) = chunkable_range {
+            let first_end = requested
+                .end
+                .unwrap_or_else(|| requested.start.saturating_add(CONNECTOR_MEDIA_CHUNK_BYTES - 1))
+                .min(requested.start.saturating_add(CONNECTOR_MEDIA_CHUNK_BYTES - 1));
+            let first_range = format!("bytes={}-{}", requested.start, first_end);
+            let mut response = match send_connector_media_request(
+                &route,
+                Method::GET,
+                Some(first_range),
+                if_range.clone(),
+            ) {
+                Ok(response) => response,
+                Err(error) => {
+                    eprintln!("Baia Host Connector media non raggiungibile: {error}");
+                    return write_error(&mut stream, 502, "Bad Gateway");
+                }
+            };
+
+            if response.status().as_u16() == 206 {
+                let content_range = match response
+                    .headers()
+                    .get(reqwest::header::CONTENT_RANGE)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(parse_content_range)
+                {
+                    Some(value) => value,
+                    None => return write_error(&mut stream, 502, "Bad Gateway"),
+                };
+                if content_range.start != requested.start {
+                    return write_error(&mut stream, 502, "Bad Gateway");
+                }
+                let expected_first_end = first_end.min(content_range.total.saturating_sub(1));
+                if content_range.end != expected_first_end {
+                    return write_error(&mut stream, 502, "Bad Gateway");
+                }
+
+                let final_end = requested
+                    .end
+                    .unwrap_or_else(|| content_range.total.saturating_sub(1))
+                    .min(content_range.total.saturating_sub(1));
+                if final_end < requested.start {
+                    return write_error(&mut stream, 502, "Bad Gateway");
+                }
+
+                if let Err(error) = stream_segmented_video_response(
+                    &mut stream,
+                    &route,
+                    response,
+                    requested.start,
+                    final_end,
+                    content_range.total,
+                    if_range.clone(),
+                    keep_alive,
+                ) {
+                    if is_client_disconnect_message(&error) {
+                        return Ok(());
+                    }
+                    return Err(error);
+                }
+                stream.flush().ok();
+                if !keep_alive {
+                    return Ok(());
+                }
+                continue;
+            }
+
+            // If If-Range does not match, HTTP semantics allow the upstream to
+            // ignore Range and return the complete representation (200). Forward
+            // that response unchanged instead of inventing segmented semantics.
+            if response.status().is_redirection() {
+                return write_error(&mut stream, 502, "Bad Gateway");
+            }
+            if let Err(error) = write_status_and_headers(&mut stream, &response, keep_alive) {
+                if is_client_disconnect_message(&error) {
+                    return Ok(());
+                }
+                return Err(error);
+            }
+            if let Err(error) = std::io::copy(&mut response, &mut stream) {
+                if !is_client_disconnect(&error) {
+                    return Err(format!("Streaming dal ponte media interrotto: {error}"));
+                }
+                return Ok(());
+            }
+            stream.flush().ok();
+            if !keep_alive {
+                return Ok(());
+            }
+            continue;
         }
-        let mut response = match request.json(&frame).send() {
+
+        let mut response = match send_connector_media_request(
+            &route,
+            method.clone(),
+            range,
+            if_range,
+        ) {
             Ok(response) => response,
             Err(error) => {
                 eprintln!("Baia Host Connector media non raggiungibile: {error}");
@@ -382,9 +467,10 @@ fn handle_connection(
             return write_error(&mut stream, 502, "Bad Gateway");
         }
 
-        let keep_alive = !connection_close && request_index < MAX_REQUESTS_PER_CONNECTION;
         if let Err(error) = write_status_and_headers(&mut stream, &response, keep_alive) {
-            if is_client_disconnect_message(&error) { return Ok(()); }
+            if is_client_disconnect_message(&error) {
+                return Ok(());
+            }
             return Err(error);
         }
         if method != Method::HEAD {
@@ -396,7 +482,258 @@ fn handle_connection(
             }
         }
         stream.flush().ok();
-        if !keep_alive { return Ok(()); }
+        if !keep_alive {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ChunkableRange {
+    start: u64,
+    end: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ParsedContentRange {
+    start: u64,
+    end: u64,
+    total: u64,
+}
+
+fn parse_chunkable_range(value: &str) -> Option<ChunkableRange> {
+    let spec = value.trim().strip_prefix("bytes=")?;
+    if spec.contains(',') {
+        return None;
+    }
+    let (start_text, end_text) = spec.split_once('-')?;
+    if start_text.is_empty() {
+        // Suffix ranges are left untouched; the browser uses them rarely and
+        // their final start offset is not known until the upstream resolves it.
+        return None;
+    }
+    let start = start_text.parse::<u64>().ok()?;
+    let end = if end_text.is_empty() {
+        None
+    } else {
+        let end = end_text.parse::<u64>().ok()?;
+        if end < start {
+            return None;
+        }
+        Some(end)
+    };
+    let should_chunk = end
+        .map(|end| end.saturating_sub(start).saturating_add(1) > CONNECTOR_MEDIA_CHUNK_BYTES)
+        .unwrap_or(true);
+    should_chunk.then_some(ChunkableRange { start, end })
+}
+
+fn parse_content_range(value: &str) -> Option<ParsedContentRange> {
+    let value = value.trim().strip_prefix("bytes ")?;
+    let (range, total) = value.split_once('/')?;
+    let (start, end) = range.split_once('-')?;
+    let start = start.parse::<u64>().ok()?;
+    let end = end.parse::<u64>().ok()?;
+    let total = total.parse::<u64>().ok()?;
+    if total == 0 || start > end || end >= total {
+        return None;
+    }
+    Some(ParsedContentRange { start, end, total })
+}
+
+fn send_connector_media_request(
+    route: &BridgeRoute,
+    method: Method,
+    range: Option<String>,
+    if_range: Option<String>,
+) -> Result<reqwest::blocking::Response, reqwest::Error> {
+    let frame = ConnectorMediaRequest {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: Uuid::new_v4().to_string(),
+        method: method.as_str().to_string(),
+        path: route.path.clone(),
+        range,
+        if_range,
+        access_grant: route.access_grant.clone(),
+        device_auth: route.authorization.clone(),
+    };
+    let mut request = route
+        .connector_client
+        .post(&route.connector_url)
+        .header(reqwest::header::ACCEPT, "*/*");
+    if !is_video_stream_path(&route.path) {
+        // Preserve the stable V3 behavior for posters/covers/music/reading:
+        // only video participates in the remote persistent-connection pool.
+        request = request.header(reqwest::header::CONNECTION, "close");
+    }
+    request.json(&frame).send()
+}
+
+fn response_header_string(
+    response: &reqwest::blocking::Response,
+    name: reqwest::header::HeaderName,
+) -> Option<String> {
+    response
+        .headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+}
+
+fn validate_segment_response(
+    response: &reqwest::blocking::Response,
+    start: u64,
+    end: u64,
+    total: u64,
+    expected_etag: Option<&str>,
+    expected_last_modified: Option<&str>,
+) -> Result<(), String> {
+    if response.status().as_u16() != 206 {
+        return Err(format!(
+            "Il Connector ha restituito status {} durante un Range segmentato.",
+            response.status().as_u16()
+        ));
+    }
+    let parsed = response
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_content_range)
+        .ok_or_else(|| "Content-Range Connector non valido durante streaming segmentato.".to_string())?;
+    if parsed.start != start || parsed.end != end || parsed.total != total {
+        return Err("Content-Range Connector incoerente durante streaming segmentato.".to_string());
+    }
+    let expected_length = end - start + 1;
+    let actual_length = response
+        .headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| "Content-Length Connector mancante durante streaming segmentato.".to_string())?;
+    if actual_length != expected_length {
+        return Err("Content-Length Connector incoerente durante streaming segmentato.".to_string());
+    }
+    if let Some(expected) = expected_etag {
+        if response_header_string(response, reqwest::header::ETAG).as_deref() != Some(expected) {
+            return Err("ETag cambiato durante streaming segmentato.".to_string());
+        }
+    }
+    if let Some(expected) = expected_last_modified {
+        if response_header_string(response, reqwest::header::LAST_MODIFIED).as_deref() != Some(expected) {
+            return Err("Last-Modified cambiato durante streaming segmentato.".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn write_segmented_status_and_headers(
+    stream: &mut TcpStream,
+    response: &reqwest::blocking::Response,
+    start: u64,
+    end: u64,
+    total: u64,
+    keep_alive: bool,
+) -> Result<(), String> {
+    write!(stream, "HTTP/1.1 206 Partial Content\r\n")
+        .map_err(|error| format!("Impossibile scrivere la risposta locale segmentata: {error}"))?;
+
+    const FORWARDED: &[&str] = &[
+        "content-type",
+        "accept-ranges",
+        "content-disposition",
+        "cache-control",
+        "etag",
+        "last-modified",
+    ];
+    for name in FORWARDED {
+        if let Some(value) = response.headers().get(*name).and_then(|value| value.to_str().ok()) {
+            write!(stream, "{}: {}\r\n", canonical_header_name(name), value)
+                .map_err(|error| format!("Impossibile scrivere gli header media segmentati: {error}"))?;
+        }
+    }
+    write!(
+        stream,
+        "Content-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nAccess-Control-Allow-Origin: {}\r\nAccess-Control-Expose-Headers: {}\r\n{}: {}\r\nConnection: {}\r\n\r\n",
+        end - start + 1,
+        start,
+        end,
+        total,
+        BRIDGE_CORS_ORIGIN,
+        BRIDGE_EXPOSE_HEADERS,
+        BRIDGE_HEADER,
+        BRIDGE_HEADER_VALUE,
+        if keep_alive { "keep-alive" } else { "close" }
+    )
+    .map_err(|error| format!("Impossibile finalizzare gli header media segmentati: {error}"))?;
+    Ok(())
+}
+
+fn stream_segmented_video_response(
+    stream: &mut TcpStream,
+    route: &BridgeRoute,
+    mut first_response: reqwest::blocking::Response,
+    start: u64,
+    end: u64,
+    total: u64,
+    if_range: Option<String>,
+    keep_alive: bool,
+) -> Result<(), String> {
+    let first_content_range = first_response
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_content_range)
+        .ok_or_else(|| "Content-Range iniziale non valido durante streaming segmentato.".to_string())?;
+    let etag = response_header_string(&first_response, reqwest::header::ETAG);
+    let last_modified = response_header_string(&first_response, reqwest::header::LAST_MODIFIED);
+    validate_segment_response(
+        &first_response,
+        first_content_range.start,
+        first_content_range.end,
+        total,
+        etag.as_deref(),
+        last_modified.as_deref(),
+    )?;
+    write_segmented_status_and_headers(stream, &first_response, start, end, total, keep_alive)?;
+
+    if let Err(error) = std::io::copy(&mut first_response, stream) {
+        if is_client_disconnect(&error) {
+            return Err(format!("client disconnect: {error}"));
+        }
+        return Err(format!("Streaming segmento media iniziale interrotto: {error}"));
+    }
+    drop(first_response);
+
+    let mut next_start = first_content_range.end.saturating_add(1);
+    while next_start <= end {
+        let next_end = end.min(next_start.saturating_add(CONNECTOR_MEDIA_CHUNK_BYTES - 1));
+        let chunk_range = format!("bytes={next_start}-{next_end}");
+        let mut response = send_connector_media_request(
+            route,
+            Method::GET,
+            Some(chunk_range),
+            if_range.clone(),
+        )
+        .map_err(|error| format!("Richiesta segmento media al Connector fallita: {error}"))?;
+        if response.status().is_redirection() {
+            return Err("Redirect Connector non consentito durante streaming segmentato.".to_string());
+        }
+        validate_segment_response(
+            &response,
+            next_start,
+            next_end,
+            total,
+            etag.as_deref(),
+            last_modified.as_deref(),
+        )?;
+        if let Err(error) = std::io::copy(&mut response, stream) {
+            if is_client_disconnect(&error) {
+                return Err(format!("client disconnect: {error}"));
+            }
+            return Err(format!("Streaming segmento media interrotto: {error}"));
+        }
+        next_start = next_end.saturating_add(1);
     }
     Ok(())
 }
@@ -555,7 +892,10 @@ pub fn baia_core_media_bridge_url(
 
 #[cfg(test)]
 mod tests {
-    use super::{bridge_token, normalize_media_stream_path, parse_request_line};
+    use super::{
+        bridge_token, normalize_media_stream_path, parse_chunkable_range, parse_content_range,
+        parse_request_line, ChunkableRange, ParsedContentRange, CONNECTOR_MEDIA_CHUNK_BYTES,
+    };
     use reqwest::Method;
 
     #[test]
@@ -632,4 +972,38 @@ mod tests {
         )
         .is_ok());
     }
+    #[test]
+    fn bridge_chunks_only_large_forward_video_ranges() {
+        assert_eq!(
+            parse_chunkable_range("bytes=0-"),
+            Some(ChunkableRange { start: 0, end: None })
+        );
+        assert_eq!(
+            parse_chunkable_range(&format!("bytes=100-{}", 100 + CONNECTOR_MEDIA_CHUNK_BYTES)),
+            Some(ChunkableRange {
+                start: 100,
+                end: Some(100 + CONNECTOR_MEDIA_CHUNK_BYTES),
+            })
+        );
+        assert_eq!(parse_chunkable_range("bytes=0-1023"), None);
+        assert_eq!(parse_chunkable_range("bytes=-1024"), None);
+        assert_eq!(parse_chunkable_range("bytes=0-10,20-30"), None);
+        assert_eq!(parse_chunkable_range("bytes=20-10"), None);
+    }
+
+    #[test]
+    fn bridge_parses_connector_content_range_strictly() {
+        assert_eq!(
+            parse_content_range("bytes 100-199/1000"),
+            Some(ParsedContentRange {
+                start: 100,
+                end: 199,
+                total: 1000,
+            })
+        );
+        assert_eq!(parse_content_range("bytes */1000"), None);
+        assert_eq!(parse_content_range("bytes 200-199/1000"), None);
+        assert_eq!(parse_content_range("bytes 0-1000/1000"), None);
+    }
+
 }
