@@ -121,6 +121,16 @@ test('streaming media usa keep-alive bounded sul TLS e sul Media Bridge locale',
   assert.match(mediaBridge, /for request_index in 1\.\.=MAX_REQUESTS_PER_CONNECTION/);
 });
 
+test('Media Bridge condivide il pool TLS e limita il keep-alive remoto al solo video', () => {
+  assert.match(mediaBridge, /struct CachedMediaConnectorClient/);
+  assert.match(mediaBridge, /connector_client: Mutex<Option<CachedMediaConnectorClient>>/);
+  assert.match(mediaBridge, /fn client_for\(&self, server_fingerprint: &str\)/);
+  assert.match(mediaBridge, /cached\.client\.clone\(\)/);
+  assert.match(mediaBridge, /let connector_keep_alive = is_video_stream_path\(&route\.path\)/);
+  assert.match(mediaBridge, /if !connector_keep_alive \{[\s\S]{0,160}CONNECTION, "close"/);
+  assert.doesNotMatch(mediaBridge, /CONNECTOR_MEDIA_CHUNK_BYTES|stream_segmented_video_response|ChunkableRange/);
+});
+
 test('direct media data plane mantiene Node nel control plane e valida il filesystem', () => {
   assert.match(connector, /BAIA_DIRECT_MEDIA_DATA_PLANE/);
   assert.match(connector, /INTERNAL_MEDIA_RESOLVE_HEADER/);

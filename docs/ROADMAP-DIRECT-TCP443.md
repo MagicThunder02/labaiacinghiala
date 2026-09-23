@@ -107,8 +107,9 @@ Update firmati, rollback, migrazioni e compatibilità protocollo.
 Implementazione introdotta sul canale `/baia/v1/media`:
 
 - HTTP/1.1 persistente tra Tauri Media Bridge e Host Connector, con `KEEP_ALIVE_IDLE_TIMEOUT = 30s` e `MAX_REQUESTS_PER_CONNECTION = 200`;
+- il Media Bridge mantiene un unico `reqwest::blocking::Client` condiviso (clone dello stesso pool) per tutte le route registrate con lo stesso fingerprint;
+- il keep-alive remoto verso `/baia/v1/media` è inizialmente consentito solo per `/api/movies/:id/stream`; poster, cover, music e reading inviano `Connection: close` per evitare che risorse brevi saturino `MAX_ACTIVE_CONNECTIONS_PER_IP`;
 - keep-alive equivalente sul server HTTP loopback del Media Bridge;
-- per i video, il Media Bridge segmenta i Range remoti maggiori di 8 MiB in richieste Connector bounded da massimo 8 MiB, mantenendo verso la WebView un unico `206` con il `Content-Range` originario. Ogni segmento viene consumato integralmente e senza buffering completo in RAM, così la connessione TLS può tornare nel pool anche quando la WebView lavora con Range multi-GB;
 - log non sensibili `connector_connection_id`, `request_index_on_connection`, `transport_reused`, `media_source` e `bytes_streamed`;
 - `HEAD /api/movies/:id/stream` esplicito in Node per autorizzare e risolvere il file senza aprire `createReadStream`;
 - feature flag `BAIA_DIRECT_MEDIA_DATA_PLANE=true` per spostare il body video da Node al Connector;
@@ -138,8 +139,11 @@ control: Host Connector -> HEAD Node -> auth/account/permission/lookup -> descri
 data:    file -> Host Connector -> TLS persistente -> Tauri Media Bridge -> WebView
 ```
 
-La revoca resta immediata a granularità di richiesta: ogni segmento Connector viene nuovamente autorizzato da Node. Non è stata introdotta una cache di autorizzazione lunga.
+La revoca resta immediata a granularità di richiesta: ogni nuova richiesta Range viene nuovamente autorizzata da Node. Non è stata introdotta una cache di autorizzazione lunga.
 
-### Baseline playback reale keep-alive
 
-Sul test reale del 23 settembre 2026, prima della segmentazione client, 1027 richieste `/baia/v1/media` hanno prodotto 812 connessioni TLS distinte: 812 richieste con `transport_reused=false`, 215 con `transport_reused=true`, e `request_index_on_connection` non oltre 2. Il pooling era quindi funzionante ma insufficiente, perché la WebView apriva Range da centinaia di MB o diversi GB e li abbandonava durante seek/preload; una risposta HTTP/1.1 non consumata non può essere rimessa nel pool. La segmentazione bounded del Media Bridge è stata introdotta per rendere il riuso effettivo nel comportamento reale del player.
+### Validazione reale keep-alive (23 settembre 2026)
+
+La prima prova reale ha mostrato 1027 richieste media su 812 connessioni TLS distinte (215 richieste riutilizzate, massimo 2 richieste per connessione). Una successiva prova con segmentazione client da 8 MiB ha peggiorato il comportamento applicativo (cover/catalogo/video) senza migliorare il riuso in modo sufficiente: 221 richieste su 195 connessioni TLS, ancora massimo 2 richieste per connessione.
+
+La segmentazione è quindi rimossa dalla V3. L'ipotesi emersa dal codice reale è che la creazione di un `reqwest::blocking::Client` per ogni route media producesse pool separati e potesse lasciare molte TLS idle contemporaneamente, entrando in conflitto con il limite Connector `MAX_ACTIVE_CONNECTIONS_PER_IP = 16`. La V3 condivide un unico pool e conserva la persistenza remota solo per il video. Prima di reintrodurre eventuale chunking bounded, questa configurazione deve superare i test di catalogo/cover e dimostrare che non si verificano rifiuti per limite connessioni.
