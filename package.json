@@ -29,7 +29,8 @@
     "connector:test": "cargo test --locked --manifest-path host-connector/Cargo.toml",
     "connector:build": "cargo build --locked --release --manifest-path host-connector/Cargo.toml",
     "connector:run": "cargo run --locked --manifest-path host-connector/Cargo.toml",
-    "analyze:native-player-poc": "node scripts/analyze-native-player-poc.js"
+    "analyze:native-player-poc": "node scripts/analyze-native-player-poc.js",
+    "analyze:native-player-transport": "node scripts/analyze-native-player-transport.js"
   },
   "engines": {
     "node": ">=24.18.1 <25"

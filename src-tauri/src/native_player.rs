@@ -30,12 +30,27 @@ const BACKEND_NAME: &str = "libmpv-render-api-native-source";
 const MAIN_WINDOW_LABEL: &str = "main";
 const UI_NAME: &str = "baia-native-compositor";
 const RENDER_BACKEND_NAME: &str = "libmpv-render-api-opengl";
-const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16);
+const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(8);
 const RENDER_POLL_INTERVAL: Duration = Duration::from_millis(8);
 const UI_STATE_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
+const DIAGNOSTIC_STATE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const VOLUME_ACTION_INTERVAL: Duration = Duration::from_millis(16);
+const SLOW_OPERATION_LOG_THRESHOLD: Duration = Duration::from_millis(50);
 const WORKER_START_TIMEOUT: Duration = Duration::from_secs(8);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
 const DIAGNOSTIC_LOG_NAME: &str = "native-player-diagnostic.log";
+const PLAYBACK_INTRO_ANIMATION_DURATION: Duration = Duration::from_secs(9);
+// Il soundtrack nativo deve essere circa 250ms avanti rispetto alla timeline
+// visiva: l'audio parte subito, mentre il primo keyframe resta fermo per un
+// quarto di secondo prima che inizi l'animazione vera e propria.
+const PLAYBACK_INTRO_AUDIO_LEAD: Duration = Duration::from_millis(250);
+// 250ms di lead audio + 9s di animazione visiva. Dopo questo punto il frame
+// finale resta come overlay mentre mpv effettua il breve pre-roll mutato.
+const PLAYBACK_INTRO_MIN_VISIBLE_DURATION: Duration = Duration::from_millis(9250);
+const PLAYBACK_INTRO_PREROLL_MIN: Duration = Duration::from_millis(120);
+const PLAYBACK_INTRO_PREROLL_FAILSAFE: Duration = Duration::from_millis(900);
+const NATIVE_PLAYBACK_START_VOLUME: f64 = 100.0;
+const FULLSCREEN_CONTROLS_HIDE_DELAY: Duration = Duration::from_secs(3);
 
 #[derive(Debug)]
 enum SurfaceAction {
@@ -57,6 +72,10 @@ struct RenderUiState {
     accent: [f32; 3],
     close_requested: bool,
     seek_preview: Option<f64>,
+    intro_visible: bool,
+    intro_started_at: Option<Instant>,
+    controls_visible: bool,
+    controls_hide_at: Option<Instant>,
 }
 
 impl Default for RenderUiState {
@@ -70,7 +89,82 @@ impl Default for RenderUiState {
             accent: [0.48, 0.69, 0.27],
             close_requested: false,
             seek_preview: None,
+            intro_visible: false,
+            intro_started_at: None,
+            controls_visible: true,
+            controls_hide_at: None,
         }
+    }
+}
+
+impl RenderUiState {
+    fn intro_progress(&self, now: Instant) -> f32 {
+        self.intro_started_at
+            .map(|started| {
+                (now.saturating_duration_since(started).as_secs_f32()
+                    / PLAYBACK_INTRO_ANIMATION_DURATION.as_secs_f32())
+                .clamp(0.0, 1.0)
+            })
+            .unwrap_or(1.0)
+    }
+
+    fn controls_can_auto_hide(&self) -> bool {
+        self.fullscreen && !self.paused && !self.intro_visible
+    }
+
+    fn schedule_controls_hide(&mut self, now: Instant) {
+        self.controls_hide_at = self
+            .controls_can_auto_hide()
+            .then(|| now + FULLSCREEN_CONTROLS_HIDE_DELAY);
+    }
+
+    fn show_controls(&mut self, now: Instant) {
+        self.controls_visible = true;
+        self.schedule_controls_hide(now);
+    }
+
+    fn begin_controls_interaction(&mut self) {
+        self.controls_visible = true;
+        self.controls_hide_at = None;
+    }
+
+    fn hide_controls(&mut self) {
+        self.controls_visible = false;
+        self.controls_hide_at = None;
+    }
+
+    fn auto_hide_controls_if_due(&mut self, now: Instant) -> bool {
+        if self.controls_visible
+            && self.controls_can_auto_hide()
+            && self.controls_hide_at.is_some_and(|deadline| now >= deadline)
+        {
+            self.hide_controls();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn set_paused(&mut self, paused: bool, now: Instant) {
+        if self.paused == paused {
+            return;
+        }
+        self.paused = paused;
+        if paused {
+            self.show_controls(now);
+        } else {
+            self.schedule_controls_hide(now);
+        }
+    }
+
+    fn set_fullscreen(&mut self, fullscreen: bool, now: Instant) {
+        if self.fullscreen == fullscreen {
+            return;
+        }
+        self.fullscreen = fullscreen;
+        // Come il WebView: ogni cambio fullscreen rende i controlli visibili;
+        // entrando a video in riproduzione riparte il timer da tre secondi.
+        self.show_controls(now);
     }
 }
 
@@ -107,6 +201,17 @@ impl RenderShared {
         }
         self.mark_dirty();
     }
+
+    fn auto_hide_controls_if_due(&self, now: Instant) {
+        let changed = self
+            .state
+            .lock()
+            .map(|mut state| state.auto_hide_controls_if_due(now))
+            .unwrap_or(false);
+        if changed {
+            self.mark_dirty();
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -118,7 +223,8 @@ mod win32_render_surface {
         ffi::CStr,
         mem,
         ptr,
-        sync::{mpsc::Sender, Arc, Mutex},
+        sync::{atomic::Ordering, mpsc::Sender, Arc, Mutex},
+        time::Instant,
     };
 
     type Hwnd = isize;
@@ -170,6 +276,7 @@ mod win32_render_surface {
     const GL_QUADS: u32 = 0x0007;
     const GL_TEXTURE_2D: u32 = 0x0DE1;
     const GL_ALPHA: u32 = 0x1906;
+    const GL_RGBA: u32 = 0x1908;
     const GL_UNSIGNED_BYTE: u32 = 0x1401;
     const GL_TEXTURE_MIN_FILTER: u32 = 0x2801;
     const GL_TEXTURE_MAG_FILTER: u32 = 0x2800;
@@ -347,6 +454,8 @@ mod win32_render_surface {
         fn GetProcAddress(module: Hmodule, name: *const c_char) -> *mut c_void;
     }
 
+    const POINTER_MOVE_WAKE_THRESHOLD: f32 = 2.0;
+
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum DragMode {
         None,
@@ -358,6 +467,8 @@ mod win32_render_surface {
         shared: Arc<RenderShared>,
         actions: Sender<SurfaceAction>,
         drag: Mutex<DragMode>,
+        last_pointer: Mutex<Option<(f32, f32)>>,
+        last_volume_emit: Mutex<Option<Instant>>,
     }
 
     impl InputBridge {
@@ -367,6 +478,19 @@ mod win32_render_surface {
                 return None;
             }
             Some(((rect.right - rect.left).max(1) as f32, (rect.bottom - rect.top).max(1) as f32))
+        }
+
+        fn remember_pointer(&self, x: f32, y: f32) -> bool {
+            let Ok(mut pointer) = self.last_pointer.lock() else {
+                return true;
+            };
+            let moved = (*pointer).map_or(true, |(previous_x, previous_y)| {
+                let dx = x - previous_x;
+                let dy = y - previous_y;
+                dx * dx + dy * dy >= POINTER_MOVE_WAKE_THRESHOLD * POINTER_MOVE_WAKE_THRESHOLD
+            });
+            *pointer = Some((x, y));
+            moved
         }
 
         fn seek_at(&self, x: f32, width: f32, commit: bool) {
@@ -384,27 +508,74 @@ mod win32_render_surface {
             }
         }
 
-        fn volume_at(&self, y: f32, height: f32) {
+        fn volume_at(&self, y: f32, height: f32, commit: bool) {
             let slider_length = (height * 0.24).clamp(168.0, 224.0);
             let top = height * 0.5 - slider_length * 0.5;
             let bottom = height * 0.5 + slider_length * 0.5;
             let ratio = (1.0 - (y - top) / (bottom - top)).clamp(0.0, 1.0);
             let volume = ratio as f64 * 100.0;
             self.shared.update(|ui| ui.volume = volume);
-            let _ = self.actions.send(SurfaceAction::SetVolume(volume));
+
+            // Il thumb deve restare fluido anche con mouse ad alta frequenza, ma non
+            // serve accodare centinaia di mpv_set_property al worker. Aggiorniamo la
+            // UI sempre e limitiamo le write libmpv a ~60 Hz, forzando il valore
+            // finale al mouse-up.
+            let now = Instant::now();
+            let should_emit = self.last_volume_emit.lock().map(|mut last| {
+                let due = commit || last.map_or(true, |previous| now.saturating_duration_since(previous) >= super::VOLUME_ACTION_INTERVAL);
+                if due { *last = Some(now); }
+                due
+            }).unwrap_or(true);
+            if should_emit {
+                let _ = self.actions.send(SurfaceAction::SetVolume(volume));
+            }
+        }
+
+        fn request_close(&self) {
+            // Feedback visivo immediato: il compositor viene spento dal render
+            // thread senza aspettare stop/demuxer teardown. La WebView resta comunque
+            // nascosta finche il worker non ha completato il teardown native-first.
+            self.shared.update(|ui| ui.close_requested = true);
+            self.shared.shutdown.store(true, Ordering::Release);
+            self.shared.mark_dirty();
+            let _ = self.actions.send(SurfaceAction::RequestClose);
         }
 
         fn mouse_down(&self, hwnd: Hwnd, x: f32, y: f32) {
             let Some((width, height)) = Self::dimensions(hwnd) else { return; };
             unsafe { let _ = SetFocus(hwnd); }
+            // Memorizziamo la posizione del click. Windows puo emettere un
+            // WM_MOUSEMOVE sintetico subito dopo LBUTTONDOWN/UP anche se il mouse
+            // non si e realmente spostato: quel messaggio non deve riaprire la UI.
+            let _ = self.remember_pointer(x, y);
 
-            if x <= 112.0 && y <= 76.0 {
-                let _ = self.actions.send(SurfaceAction::RequestClose);
+            // Come l'overlay WebView originale, l'intro assorbe i click: durante
+            // il preload non devono partire seek/play/volume dietro al logo.
+            if self.shared.snapshot().intro_visible {
+                return;
+            }
+
+            let now = Instant::now();
+            self.shared.auto_hide_controls_if_due(now);
+            let state = self.shared.snapshot();
+
+            // Primo click a controlli nascosti: mostra soltanto la UI, anche se
+            // cade nella posizione di un controllo invisibile. E lo stesso gesto
+            // del vecchio player WebView.
+            if !state.controls_visible {
+                self.shared.update(|ui| ui.show_controls(now));
+                return;
+            }
+
+            let back_left = (width * 0.024).clamp(16.0, 38.0);
+            if x >= back_left && x <= back_left + 104.0 && y >= 12.0 && y <= 58.0 {
+                self.request_close();
                 return;
             }
 
             let seek_y = height - 106.0;
             if x >= 32.0 && x <= width - 32.0 && (y - seek_y).abs() <= 22.0 {
+                self.shared.update(|ui| ui.begin_controls_interaction());
                 if let Ok(mut drag) = self.drag.lock() { *drag = DragMode::Seek; }
                 unsafe { let _ = SetCapture(hwnd); }
                 self.seek_at(x, width, false);
@@ -416,11 +587,13 @@ mod win32_render_surface {
             let dx = x - play_x;
             let dy = y - play_y;
             if dx * dx + dy * dy <= 38.0 * 38.0 {
+                self.shared.update(|ui| ui.show_controls(now));
                 let _ = self.actions.send(SurfaceAction::TogglePause);
                 return;
             }
 
             if x >= width - 104.0 && y >= height - 90.0 {
+                self.shared.update(|ui| ui.show_controls(now));
                 let _ = self.actions.send(SurfaceAction::ToggleFullscreen);
                 return;
             }
@@ -429,19 +602,39 @@ mod win32_render_surface {
             let volume_top = height * 0.5 - slider_length * 0.5;
             let volume_bottom = height * 0.5 + slider_length * 0.5;
             if x >= width - 112.0 && y >= volume_top - 18.0 && y <= volume_bottom + 18.0 {
+                self.shared.update(|ui| ui.begin_controls_interaction());
                 if let Ok(mut drag) = self.drag.lock() { *drag = DragMode::Volume; }
                 unsafe { let _ = SetCapture(hwnd); }
-                self.volume_at(y, height);
+                self.volume_at(y, height, false);
+                return;
+            }
+
+            // Click su una zona libera: in fullscreen alterna esattamente come
+            // il WebView, nascondendo tutti gli elementi del compositor.
+            if state.fullscreen {
+                self.shared.update(|ui| ui.hide_controls());
             }
         }
 
         fn mouse_move(&self, hwnd: Hwnd, x: f32, y: f32) {
             let Some((width, height)) = Self::dimensions(hwnd) else { return; };
+            if self.shared.snapshot().intro_visible {
+                return;
+            }
             let drag = self.drag.lock().map(|drag| *drag).unwrap_or(DragMode::None);
             match drag {
                 DragMode::Seek => self.seek_at(x, width, false),
-                DragMode::Volume => self.volume_at(y, height),
-                DragMode::None => {}
+                DragMode::Volume => self.volume_at(y, height, false),
+                DragMode::None => {
+                    // WM_MOUSEMOVE puo arrivare anche come effetto collaterale di
+                    // un click. Riaccendiamo i controlli solo dopo uno spostamento
+                    // reale del puntatore, non per il messaggio sintetico a coordinate
+                    // identiche che segue il click usato per nasconderli.
+                    if self.remember_pointer(x, y) {
+                        let now = Instant::now();
+                        self.shared.update(|ui| ui.show_controls(now));
+                    }
+                }
             }
         }
 
@@ -455,14 +648,35 @@ mod win32_render_surface {
                 DragMode::None
             };
             unsafe { let _ = ReleaseCapture(); }
+            let _ = self.remember_pointer(x, y);
             match drag {
-                DragMode::Seek => self.seek_at(x, width, true),
-                DragMode::Volume => self.volume_at(y, height),
+                DragMode::Seek => {
+                    self.seek_at(x, width, true);
+                    let now = Instant::now();
+                    self.shared.update(|ui| ui.show_controls(now));
+                }
+                DragMode::Volume => {
+                    self.volume_at(y, height, true);
+                    let now = Instant::now();
+                    self.shared.update(|ui| ui.show_controls(now));
+                }
                 DragMode::None => {}
             }
         }
 
         fn key_down(&self, key: usize) {
+            if self.shared.snapshot().intro_visible {
+                if key == VK_ESCAPE {
+                    self.request_close();
+                }
+                return;
+            }
+
+            if matches!(key, VK_SPACE | VK_LEFT | VK_RIGHT | VK_F | VK_ESCAPE) {
+                let now = Instant::now();
+                self.shared.update(|ui| ui.show_controls(now));
+            }
+
             match key {
                 VK_SPACE => { let _ = self.actions.send(SurfaceAction::TogglePause); }
                 VK_LEFT => { let _ = self.actions.send(SurfaceAction::SeekRelative(-10.0)); }
@@ -472,7 +686,7 @@ mod win32_render_surface {
                     if self.shared.snapshot().fullscreen {
                         let _ = self.actions.send(SurfaceAction::ToggleFullscreen);
                     } else {
-                        let _ = self.actions.send(SurfaceAction::RequestClose);
+                        self.request_close();
                     }
                 }
                 _ => {}
@@ -544,6 +758,31 @@ mod win32_render_surface {
     const ICON_VOLUME_ALPHA: &[u8] = include_bytes!("native_player_assets/volume-29.alpha");
     const CIRCLE_16_ALPHA: &[u8] = include_bytes!("native_player_assets/circle-16.alpha");
     const CIRCLE_64_ALPHA: &[u8] = include_bytes!("native_player_assets/circle-64.alpha");
+    const BACK_BUTTON_PILL_ALPHA: &[u8] =
+        include_bytes!("native_player_assets/back-pill-208x84.alpha");
+    const TEXT_INDIETRO_ALPHA: &[u8] =
+        include_bytes!("native_player_assets/text-indietro-100x32.alpha");
+    const TIME_GLYPHS_ALPHA: &[u8] =
+        include_bytes!("native_player_assets/time-glyphs-312x40.alpha");
+    const TIME_GLYPHS: &str = "0123456789:-/";
+    const TIME_GLYPH_COUNT: usize = 13;
+    const TIME_GLYPH_CELL_WIDTH: f32 = 24.0;
+    const TIME_GLYPH_CELL_HEIGHT: f32 = 40.0;
+
+    // Derivati dagli SVG originali in public/assets/app-intro. Sono raster ad
+    // alta risoluzione incorporati nel binario: nessuna dipendenza SVG/runtime.
+    const INTRO_BOAR_OPEN_ALPHA: &[u8] =
+        include_bytes!("native_player_assets/intro-boar-open-1024.alpha");
+    const INTRO_BOAR_WINK_ALPHA: &[u8] =
+        include_bytes!("native_player_assets/intro-boar-wink-1024.alpha");
+    const INTRO_EYEPATCH_RGBA: &[u8] =
+        include_bytes!("native_player_assets/intro-eyepatch-1024.rgba");
+    const INTRO_WORDMARK_RGBA: &[u8] =
+        include_bytes!("native_player_assets/intro-wordmark-2048x787.rgba");
+    const INTRO_RING_ALPHA: &[u8] =
+        include_bytes!("native_player_assets/intro-ring-1024.alpha");
+    const INTRO_RADIAL_ALPHA: &[u8] =
+        include_bytes!("native_player_assets/intro-radial-256.alpha");
 
     #[derive(Clone, Copy)]
     struct UiTexture {
@@ -589,6 +828,47 @@ mod win32_render_surface {
             }
             Ok(Self { id })
         }
+
+        fn from_rgba(width: i32, height: i32, rgba: &[u8]) -> Result<Self, String> {
+            let expected = (width as usize)
+                .saturating_mul(height as usize)
+                .saturating_mul(4);
+            if rgba.len() != expected {
+                return Err(format!(
+                    "Texture RGBA UI non valida: {}x{} richiede {} byte, trovati {}.",
+                    width,
+                    height,
+                    expected,
+                    rgba.len()
+                ));
+            }
+            let mut id = 0u32;
+            unsafe {
+                glGenTextures(1, &mut id);
+                if id == 0 {
+                    return Err("glGenTextures ha restituito texture 0 per la UI Baia.".to_string());
+                }
+                glBindTexture(GL_TEXTURE_2D, id);
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+                glTexImage2D(
+                    GL_TEXTURE_2D,
+                    0,
+                    GL_RGBA as i32,
+                    width,
+                    height,
+                    0,
+                    GL_RGBA,
+                    GL_UNSIGNED_BYTE,
+                    rgba.as_ptr().cast::<c_void>(),
+                );
+                glBindTexture(GL_TEXTURE_2D, 0);
+            }
+            Ok(Self { id })
+        }
     }
 
     struct UiTextures {
@@ -600,6 +880,15 @@ mod win32_render_surface {
         volume: UiTexture,
         circle_small: UiTexture,
         circle_large: UiTexture,
+        back_button_pill: UiTexture,
+        text_indietro: UiTexture,
+        time_glyphs: UiTexture,
+        intro_boar_open: UiTexture,
+        intro_boar_wink: UiTexture,
+        intro_eyepatch: UiTexture,
+        intro_wordmark: UiTexture,
+        intro_ring: UiTexture,
+        intro_radial: UiTexture,
     }
 
     impl UiTextures {
@@ -621,9 +910,37 @@ mod win32_render_surface {
                 volume: UiTexture::from_alpha(29, 29, ICON_VOLUME_ALPHA)?,
                 circle_small: UiTexture::from_alpha(16, 16, CIRCLE_16_ALPHA)?,
                 circle_large: UiTexture::from_alpha(64, 64, CIRCLE_64_ALPHA)?,
+                back_button_pill: UiTexture::from_alpha(208, 84, BACK_BUTTON_PILL_ALPHA)?,
+                text_indietro: UiTexture::from_alpha(100, 32, TEXT_INDIETRO_ALPHA)?,
+                time_glyphs: UiTexture::from_alpha(312, 40, TIME_GLYPHS_ALPHA)?,
+                intro_boar_open: UiTexture::from_alpha(
+                    1024,
+                    1024,
+                    INTRO_BOAR_OPEN_ALPHA,
+                )?,
+                intro_boar_wink: UiTexture::from_alpha(
+                    1024,
+                    1024,
+                    INTRO_BOAR_WINK_ALPHA,
+                )?,
+                intro_eyepatch: UiTexture::from_rgba(
+                    1024,
+                    1024,
+                    INTRO_EYEPATCH_RGBA,
+                )?,
+                intro_wordmark: UiTexture::from_rgba(
+                    2048,
+                    787,
+                    INTRO_WORDMARK_RGBA,
+                )?,
+                intro_ring: UiTexture::from_alpha(1024, 1024, INTRO_RING_ALPHA)?,
+                intro_radial: UiTexture::from_alpha(256, 256, INTRO_RADIAL_ALPHA)?,
             };
             diagnostic_log(
-                "native_player ui_renderer=textured_svg source=webview_icons filter=linear antialias=alpha",
+                "native_player ui_renderer=textured_svg source=webview_icons filter=linear antialias=alpha text=outfit_raster",
+            );
+            diagnostic_log(
+                "native_player playback_intro_renderer=textured_svg source=webview_app_intro filter=linear antialias=alpha_rgba",
             );
             Ok(textures)
         }
@@ -654,6 +971,42 @@ mod win32_render_surface {
             glTexCoord2f(1.0, 1.0);
             glVertex2f(x2, y2);
             glTexCoord2f(0.0, 1.0);
+            glVertex2f(x1, y2);
+            glEnd();
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glDisable(GL_TEXTURE_2D);
+        }
+    }
+
+    fn textured_quad_uv(
+        texture: UiTexture,
+        cx: f32,
+        cy: f32,
+        width: f32,
+        height: f32,
+        u1: f32,
+        v1: f32,
+        u2: f32,
+        v2: f32,
+        color: [f32; 4],
+    ) {
+        let x1 = cx - width * 0.5;
+        let y1 = cy - height * 0.5;
+        let x2 = cx + width * 0.5;
+        let y2 = cy + height * 0.5;
+        unsafe {
+            glEnable(GL_TEXTURE_2D);
+            glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+            glBindTexture(GL_TEXTURE_2D, texture.id);
+            glColor4f(color[0], color[1], color[2], color[3]);
+            glBegin(GL_QUADS);
+            glTexCoord2f(u1, v1);
+            glVertex2f(x1, y1);
+            glTexCoord2f(u2, v1);
+            glVertex2f(x2, y1);
+            glTexCoord2f(u2, v2);
+            glVertex2f(x2, y2);
+            glTexCoord2f(u1, v2);
             glVertex2f(x1, y2);
             glEnd();
             glBindTexture(GL_TEXTURE_2D, 0);
@@ -692,6 +1045,278 @@ mod win32_render_surface {
         quad(x1 + radius, cy - radius, x2 - radius, cy + radius, color);
         smooth_circle(textures, x1 + radius, cy, thickness, color);
         smooth_circle(textures, x2 - radius, cy, thickness, color);
+    }
+
+    fn time_string(seconds: f64) -> String {
+        let safe = if seconds.is_finite() { seconds.max(0.0).floor() as u64 } else { 0 };
+        let hours = safe / 3600;
+        let minutes = (safe % 3600) / 60;
+        let secs = safe % 60;
+        format!("{hours:02}:{minutes:02}:{secs:02}")
+    }
+
+    fn draw_time_glyph(
+        textures: &UiTextures,
+        character: char,
+        cx: f32,
+        cy: f32,
+        box_height: f32,
+        color: [f32; 4],
+    ) -> f32 {
+        let Some(index) = TIME_GLYPHS.chars().position(|candidate| candidate == character) else {
+            return box_height * 0.60;
+        };
+        let cell_width =
+            (box_height * (TIME_GLYPH_CELL_WIDTH / TIME_GLYPH_CELL_HEIGHT)).round();
+        let u1 = index as f32 / TIME_GLYPH_COUNT as f32;
+        let u2 = (index + 1) as f32 / TIME_GLYPH_COUNT as f32;
+        textured_quad_uv(
+            textures.time_glyphs,
+            cx,
+            cy,
+            cell_width,
+            box_height,
+            u1,
+            0.0,
+            u2,
+            1.0,
+            color,
+        );
+        cell_width
+    }
+
+    fn draw_time_run(
+        textures: &UiTextures,
+        text: &str,
+        mut x: f32,
+        cy: f32,
+        box_height: f32,
+        color: [f32; 4],
+    ) -> f32 {
+        for character in text.chars() {
+            let advance =
+                (box_height * (TIME_GLYPH_CELL_WIDTH / TIME_GLYPH_CELL_HEIGHT)).round();
+            let _ = draw_time_glyph(
+                textures,
+                character,
+                x + advance * 0.5,
+                cy,
+                box_height,
+                color,
+            );
+            x += advance;
+        }
+        x
+    }
+
+    fn draw_player_time(
+        textures: &UiTextures,
+        left: f32,
+        cy: f32,
+        current: f64,
+        duration: f64,
+        width: f32,
+    ) {
+        let remaining = (duration.max(0.0) - current.max(0.0)).max(0.0);
+        let remaining_text = format!("-{}", time_string(remaining));
+        let total_text = time_string(duration);
+        // Raster vicino alla dimensione finale + coordinate pixel-snapped:
+        // evita la minificazione ~10x del vecchio atlas 160px, che con il solo
+        // bilinear filtering di OpenGL 1.1 produceva alias/pixel visibili.
+        let font_size = (width * 0.0125).clamp(12.0, 16.0).round();
+        let box_height = (font_size * 1.16).round();
+        let gap = (font_size * 0.50).round();
+        let left = left.round();
+        let cy = cy.round();
+        let shadow = [0.0, 0.0, 0.0, 0.88];
+        let white = [1.0, 1.0, 1.0, 1.0];
+        let separator = [1.0, 1.0, 1.0, 0.62];
+
+        let draw = |y: f32, text_color: [f32; 4], separator_color: [f32; 4]| {
+            let mut x = left;
+            x = draw_time_run(textures, &remaining_text, x, y, box_height, text_color);
+            x += gap;
+            x = draw_time_run(textures, "/", x, y, box_height, separator_color);
+            x += gap;
+            let _ = draw_time_run(textures, &total_text, x, y, box_height, text_color);
+        };
+
+        draw(cy + 2.0, shadow, shadow);
+        draw(cy, white, separator);
+    }
+
+    fn lerp(a: f32, b: f32, t: f32) -> f32 {
+        a + (b - a) * t.clamp(0.0, 1.0)
+    }
+
+    fn segment(progress: f32, start: f32, end: f32) -> f32 {
+        if end <= start {
+            return 1.0;
+        }
+        ((progress - start) / (end - start)).clamp(0.0, 1.0)
+    }
+
+    fn draw_playback_intro(
+        textures: &UiTextures,
+        state: &super::RenderUiState,
+        width: f32,
+        height: f32,
+    ) {
+        let progress = state.intro_progress(std::time::Instant::now());
+
+        // Stesso fondo del playback-intro WebView.
+        quad(
+            0.0,
+            0.0,
+            width,
+            height,
+            [47.0 / 255.0, 51.0 / 255.0, 45.0 / 255.0, 1.0],
+        );
+
+        let gradient = |cx: f32, cy: f32, stop: f32, color: [f32; 4]| {
+            let far_x = cx.max(width - cx);
+            let far_y = cy.max(height - cy);
+            let radius = (far_x * far_x + far_y * far_y).sqrt() * stop;
+            textured_quad(
+                textures.intro_radial,
+                cx,
+                cy,
+                radius * 2.0,
+                radius * 2.0,
+                color,
+            );
+        };
+        gradient(
+            width * 0.20,
+            height * 0.15,
+            0.36,
+            [111.0 / 255.0, 145.0 / 255.0, 63.0 / 255.0, 0.28],
+        );
+        gradient(
+            width * 0.82,
+            height * 0.78,
+            0.34,
+            [86.0 / 255.0, 109.0 / 255.0, 50.0 / 255.0, 0.22],
+        );
+
+        // .app-intro-emblem: 46.3vmin con gli stessi keyframe 42.2/50/60/67.8%.
+        let vmin = width.min(height);
+        let base_emblem = vmin * 0.463;
+        let (emblem_scale, emblem_offset_y) = if progress <= 0.422 {
+            (1.0, 0.0)
+        } else if progress <= 0.50 {
+            (lerp(1.0, 0.74, segment(progress, 0.422, 0.50)), 0.0)
+        } else if progress <= 0.60 {
+            (0.74, 0.0)
+        } else if progress <= 0.678 {
+            (
+                0.74,
+                lerp(0.0, -height * 0.2055, segment(progress, 0.60, 0.678)),
+            )
+        } else {
+            (0.74, -height * 0.2055)
+        };
+        let emblem_size = base_emblem * emblem_scale;
+        let emblem_x = width * 0.5;
+        let emblem_y = height * 0.5 + emblem_offset_y;
+
+        let ring_opacity = if progress <= 0.055 {
+            0.0
+        } else if progress <= 0.078 {
+            lerp(0.0, 0.58, segment(progress, 0.055, 0.078))
+        } else if progress <= 0.10 {
+            lerp(0.58, 1.0, segment(progress, 0.078, 0.10))
+        } else {
+            1.0
+        };
+        textured_quad(
+            textures.intro_ring,
+            emblem_x,
+            emblem_y,
+            emblem_size,
+            emblem_size,
+            [1.0, 1.0, 1.0, ring_opacity],
+        );
+
+        // Il passaggio open -> wink resta discreto al 24%, come nel CSS originale.
+        let open_opacity = if progress <= 0.095 {
+            0.0
+        } else if progress <= 0.111 {
+            lerp(0.0, 0.34, segment(progress, 0.095, 0.111))
+        } else if progress <= 0.13 {
+            lerp(0.34, 1.0, segment(progress, 0.111, 0.13))
+        } else if progress < 0.24 {
+            1.0
+        } else {
+            0.0
+        };
+        if open_opacity > 0.0 {
+            textured_quad(
+                textures.intro_boar_open,
+                emblem_x,
+                emblem_y,
+                emblem_size,
+                emblem_size,
+                [1.0, 1.0, 1.0, open_opacity],
+            );
+        }
+        if progress >= 0.24 {
+            textured_quad(
+                textures.intro_boar_wink,
+                emblem_x,
+                emblem_y,
+                emblem_size,
+                emblem_size,
+                [1.0, 1.0, 1.0, 1.0],
+            );
+        }
+
+        let (eyepatch_opacity, eyepatch_scale) = if progress <= 0.343 {
+            (0.0, 0.72)
+        } else if progress <= 0.357 {
+            let t = segment(progress, 0.343, 0.357);
+            (t, lerp(0.72, 1.025, t))
+        } else if progress <= 0.37 {
+            (1.0, lerp(1.025, 1.0, segment(progress, 0.357, 0.37)))
+        } else {
+            (1.0, 1.0)
+        };
+        if eyepatch_opacity > 0.0 {
+            let size = emblem_size * eyepatch_scale;
+            textured_quad(
+                textures.intro_eyepatch,
+                emblem_x,
+                emblem_y,
+                size,
+                size,
+                [1.0, 1.0, 1.0, eyepatch_opacity],
+            );
+        }
+
+        // .app-intro-wordmark: stessa posizione, dimensionamento landscape/portrait
+        // e stessa entrata 61.5 -> 67.8%.
+        let base_wordmark_width = if height > width {
+            (width * 0.88).min(height * 0.62)
+        } else {
+            (width * 0.544).min(height * 0.967)
+        };
+        let wordmark_t = segment(progress, 0.615, 0.678);
+        let wordmark_opacity = if progress <= 0.615 { 0.0 } else { wordmark_t };
+        if wordmark_opacity > 0.0 {
+            let wordmark_scale = lerp(0.985, 1.0, wordmark_t);
+            let wordmark_y_offset = lerp(10.0, 0.0, wordmark_t);
+            let wordmark_width = base_wordmark_width * wordmark_scale;
+            let wordmark_height = wordmark_width * (787.0 / 2048.0);
+            let wordmark_top = height * 0.5305 + wordmark_y_offset;
+            textured_quad(
+                textures.intro_wordmark,
+                width * 0.5,
+                wordmark_top + wordmark_height * 0.5,
+                wordmark_width,
+                wordmark_height,
+                [1.0, 1.0, 1.0, wordmark_opacity],
+            );
+        }
     }
 
     pub struct RenderSurface {
@@ -744,6 +1369,8 @@ mod win32_render_surface {
                 shared,
                 actions,
                 drag: Mutex::new(DragMode::None),
+                last_pointer: Mutex::new(None),
+                last_volume_emit: Mutex::new(None),
             });
             let hwnd = unsafe {
                 CreateWindowExW(
@@ -936,15 +1563,48 @@ mod win32_render_surface {
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             }
 
-            quad(0.0, 0.0, width, 88.0, [0.0, 0.0, 0.0, 0.34]);
-            quad(0.0, height - 156.0, width, height, [0.0, 0.0, 0.0, 0.52]);
+            if state.intro_visible {
+                draw_playback_intro(&self.ui_textures, state, width, height);
+                unsafe { glDisable(GL_BLEND); }
+                return;
+            }
 
-            // Maschera alfa rasterizzata direttamente dall'SVG WebView originale.
+            if !state.controls_visible {
+                unsafe { glDisable(GL_BLEND); }
+                return;
+            }
+
+            quad(0.0, 0.0, width, 88.0, [0.0, 0.0, 0.0, 0.34]);
+
+            // Indietro come nel WebView: pill 42px, fondo rgba(20,20,20,.52),
+            // icona 20px e label Outfit. Il fondo è UNA sola maschera AA: la vecchia
+            // costruzione con quad + quattro cerchi traslucidi sommava l'alpha nelle
+            // giunzioni e generava i blocchi/aloni visibili nello screenshot.
+            let back_left = (width * 0.024).clamp(16.0, 38.0).round();
+            let back_top = 14.0;
+            let back_width = 104.0;
+            let back_height = 42.0;
+            textured_quad(
+                self.ui_textures.back_button_pill,
+                back_left + back_width * 0.5,
+                back_top + back_height * 0.5,
+                back_width,
+                back_height,
+                [20.0 / 255.0, 20.0 / 255.0, 20.0 / 255.0, 0.52],
+            );
             textured_quad(
                 self.ui_textures.chevron_left,
-                40.0,
-                52.0,
-                16.0,
+                back_left + 21.0,
+                back_top + back_height * 0.5,
+                20.0,
+                20.0,
+                [1.0, 1.0, 1.0, 0.92],
+            );
+            textured_quad(
+                self.ui_textures.text_indietro,
+                back_left + 64.0,
+                back_top + back_height * 0.5,
+                50.0,
                 16.0,
                 [1.0, 1.0, 1.0, 0.92],
             );
@@ -974,6 +1634,19 @@ mod win32_render_surface {
                 );
             }
             smooth_circle(&self.ui_textures, seek_x, seek_y, 16.0, accent);
+
+            // Tempo come nel WebView: rimanente / totale, allineato a sinistra.
+            draw_player_time(
+                &self.ui_textures,
+                seek_left,
+                height - 52.0,
+                preview,
+                state.duration,
+                width,
+            );
+
+            // Nessun pannello fumé rettangolare sul fondo: i controlli restano
+            // leggibili grazie a ombre/testure individuali senza coprire il video.
 
             // Play/Pausa: 58x58 bianco, icona 27x27 come .player-play-pause.
             let play_x = width * 0.5;
@@ -1206,6 +1879,35 @@ fn set_main_webview_visible(app: &AppHandle, visible: bool, reason: &str) -> boo
     }
 }
 
+fn set_playback_intro_audio(app: &AppHandle, active: bool, reason: &str) {
+    let Some(webview) = app.get_webview(MAIN_WINDOW_LABEL) else {
+        diagnostic_log(format!(
+            "native_player intro_audio={} result=missing reason={}",
+            if active { "start" } else { "stop" },
+            reason
+        ));
+        return;
+    };
+    let script = if active {
+        "window.BaiaShell?.playbackIntroAudio?.();"
+    } else {
+        "window.BaiaShell?.stopPlaybackIntroAudio?.();"
+    };
+    match webview.eval(script) {
+        Ok(()) => diagnostic_log(format!(
+            "native_player intro_audio={} result=ok reason={}",
+            if active { "start" } else { "stop" },
+            reason
+        )),
+        Err(error) => diagnostic_log(format!(
+            "native_player intro_audio={} result=error reason={} error={}",
+            if active { "start" } else { "stop" },
+            reason,
+            error
+        )),
+    }
+}
+
 type MpvCreate = unsafe extern "C" fn() -> *mut c_void;
 type MpvInitialize = unsafe extern "C" fn(*mut c_void) -> i32;
 type MpvTerminateDestroy = unsafe extern "C" fn(*mut c_void);
@@ -1271,6 +1973,7 @@ const MPV_EVENT_NONE: i32 = 0;
 const MPV_EVENT_SHUTDOWN: i32 = 1;
 const MPV_EVENT_END_FILE: i32 = 7;
 const MPV_EVENT_FILE_LOADED: i32 = 8;
+const MPV_EVENT_PLAYBACK_RESTART: i32 = 21;
 type MpvStreamCbAddRo = unsafe extern "C" fn(
     *mut c_void,
     *const c_char,
@@ -1462,19 +2165,9 @@ impl NativePlaybackState {
             paused_for_cache: bool_property("paused-for-cache"),
             time_pos: number_property("time-pos"),
             duration: number_property("duration"),
-            cache_duration: number_property("demuxer-cache-duration"),
-            cache_buffering_state: number_property("cache-buffering-state"),
-            cache_speed: number_property("cache-speed"),
             volume: number_property("volume"),
             muted: bool_property("mute"),
-            fullscreen: bool_property("user-data/baia/fullscreen"),
-            demuxer_cache_idle: bool_property("demuxer-cache-idle"),
-            demuxer_cache_state: api.get_property(handle, "demuxer-cache-state"),
-            hwdec_current: api.get_property(handle, "hwdec-current").filter(|value| !value.is_empty() && value != "no"),
-            video_codec: api.get_property(handle, "video-codec"),
-            audio_codec: api.get_property(handle, "audio-codec"),
-            ui_close_requested: false,
-            source: None,
+            ..Self::default()
         }
     }
 }
@@ -1504,9 +2197,6 @@ enum PlayerCommand {
     Stop {
         response: Sender<Result<(), String>>,
     },
-    GetState {
-        response: Sender<Result<NativePlaybackState, String>>,
-    },
     Shutdown,
 }
 
@@ -1519,6 +2209,11 @@ pub struct NativePlayerState {
     resource_dir: PathBuf,
     runtime: Mutex<Option<PlayerRuntime>>,
     ui_close_requested: Arc<AtomicBool>,
+    // La WebView viene sospesa/nascosta durante il playback e il worker mpv
+    // viene distrutto prima di riesporla. Manteniamo quindi nel Core l'ultimo
+    // snapshot valido di posizione/durata, cosi il frontend puo salvarlo anche
+    // dopo il teardown native-first senza dipendere dal polling JS in background.
+    last_playback_state: Arc<Mutex<NativePlaybackState>>,
 }
 
 impl NativePlayerState {
@@ -1527,6 +2222,7 @@ impl NativePlayerState {
             resource_dir,
             runtime: Mutex::new(None),
             ui_close_requested: Arc::new(AtomicBool::new(false)),
+            last_playback_state: Arc::new(Mutex::new(NativePlaybackState::default())),
         }
     }
 
@@ -1646,6 +2342,7 @@ impl NativePlayerState {
         let (sender, receiver) = mpsc::channel();
         let (ready_sender, ready_receiver) = mpsc::channel();
         let ui_close_requested = self.ui_close_requested.clone();
+        let last_playback_state = self.last_playback_state.clone();
         let worker = thread::Builder::new()
             .name("baia-libmpv".to_string())
             .spawn(move || {
@@ -1657,6 +2354,7 @@ impl NativePlayerState {
                     receiver,
                     ready_sender,
                     ui_close_requested,
+                    last_playback_state,
                 )
             })
             .map_err(|error| {
@@ -1725,6 +2423,17 @@ impl NativePlayerState {
         volume: f64,
     ) -> Result<(), String> {
         self.ui_close_requested.store(false, Ordering::Release);
+        if let Ok(mut snapshot) = self.last_playback_state.lock() {
+            *snapshot = NativePlaybackState {
+                active: true,
+                paused: true,
+                idle: false,
+                time_pos: Some(start_seconds.max(0.0)),
+                volume: Some(volume.clamp(0.0, 100.0)),
+                fullscreen: initial_fullscreen,
+                ..NativePlaybackState::default()
+            };
+        }
         let sender = self.ensure_runtime(app, parent_window_handle, initial_fullscreen)?;
         let (response_sender, response_receiver) = mpsc::channel();
         sender
@@ -1788,44 +2497,38 @@ impl NativePlayerState {
         }
     }
 
+    fn cached_playback_state(&self) -> Result<NativePlaybackState, String> {
+        let mut state = self
+            .last_playback_state
+            .lock()
+            .map_err(|_| "Snapshot playback nativo non disponibile.".to_string())?
+            .clone();
+        state.active = false;
+        state.idle = true;
+        state.ui_close_requested = self.ui_close_requested.load(Ordering::Acquire);
+        Ok(state)
+    }
+
     fn playback_state(&self) -> Result<NativePlaybackState, String> {
-        let sender = {
-            let runtime = self
-                .runtime
-                .lock()
-                .map_err(|_| "Stato libmpv non disponibile.".to_string())?;
-            runtime
-                .as_ref()
-                .filter(|runtime| !runtime.worker.is_finished())
-                .map(|runtime| runtime.sender.clone())
-        };
-        let Some(sender) = sender else {
-            return Ok(NativePlaybackState {
-                idle: true,
-                ui_close_requested: self.ui_close_requested.load(Ordering::Acquire),
-                ..NativePlaybackState::default()
-            });
-        };
-        let (response_sender, response_receiver) = mpsc::channel();
-        if sender
-            .send(PlayerCommand::GetState {
-                response: response_sender,
-            })
-            .is_err()
-        {
-            return Ok(NativePlaybackState {
-                idle: true,
-                ui_close_requested: self.ui_close_requested.load(Ordering::Acquire),
-                ..NativePlaybackState::default()
-            });
+        // Il worker aggiorna questo snapshot ogni 100ms. Il frontend lo legge ogni
+        // 250ms: non c'e alcun motivo di fare un round-trip sincrono verso libmpv
+        // per ogni poll, che in caso di demuxer occupato poteva bloccare l'IPC UI.
+        let runtime_active = self
+            .runtime
+            .lock()
+            .map_err(|_| "Stato libmpv non disponibile.".to_string())?
+            .as_ref()
+            .is_some_and(|runtime| !runtime.worker.is_finished());
+        if !runtime_active {
+            return self.cached_playback_state();
         }
-        response_receiver
-            .recv_timeout(COMMAND_TIMEOUT)
-            .unwrap_or_else(|_| Ok(NativePlaybackState {
-                idle: true,
-                ui_close_requested: self.ui_close_requested.load(Ordering::Acquire),
-                ..NativePlaybackState::default()
-            }))
+        let mut state = self
+            .last_playback_state
+            .lock()
+            .map_err(|_| "Snapshot playback nativo non disponibile.".to_string())?
+            .clone();
+        state.ui_close_requested = self.ui_close_requested.load(Ordering::Acquire);
+        Ok(state)
     }
 }
 
@@ -1978,7 +2681,13 @@ fn render_thread_main(
             )),
         }
 
-        if shared.dirty.swap(false, Ordering::AcqRel) {
+        let now = Instant::now();
+        shared.auto_hide_controls_if_due(now);
+        let intro_animating = {
+            let ui = shared.snapshot();
+            ui.intro_visible && ui.intro_progress(now) < 1.0
+        };
+        if shared.dirty.swap(false, Ordering::AcqRel) || intro_animating {
             if let Err(error) = surface.make_current() {
                 diagnostic_log(format!(
                     "native_player render=error stage=make_current error={error}"
@@ -2039,38 +2748,160 @@ fn render_thread_main(
     diagnostic_log("native_player render_thread=closed");
 }
 
-fn update_render_state_from_mpv(
-    api: &MpvApi,
-    handle: *mut c_void,
-    shared: &RenderShared,
-) {
-    let paused = api
-        .get_property(handle, "pause")
-        .is_some_and(|value| matches!(value.as_str(), "yes" | "true" | "1"));
-    let time_pos = api
-        .get_property(handle, "time-pos")
-        .and_then(|value| value.parse::<f64>().ok())
-        .unwrap_or(0.0);
-    let duration = api
-        .get_property(handle, "duration")
-        .and_then(|value| value.parse::<f64>().ok())
-        .unwrap_or(0.0);
-    let volume = api
-        .get_property(handle, "volume")
-        .and_then(|value| value.parse::<f64>().ok())
-        .unwrap_or(100.0);
+fn update_render_state_from_snapshot(state: &NativePlaybackState, shared: &RenderShared) {
     shared.update(|ui| {
-        ui.paused = paused;
-        ui.time_pos = time_pos.max(0.0);
-        ui.duration = duration.max(0.0);
-        ui.volume = volume.clamp(0.0, 100.0);
-        if ui.seek_preview.is_some() && !api
-            .get_property(handle, "seeking")
-            .is_some_and(|value| matches!(value.as_str(), "yes" | "true" | "1"))
-        {
+        ui.set_paused(state.paused, Instant::now());
+        if let Some(time_pos) = state.time_pos {
+            ui.time_pos = time_pos.max(0.0);
+        }
+        if let Some(duration) = state.duration {
+            ui.duration = duration.max(0.0);
+        }
+        if let Some(volume) = state.volume {
+            ui.volume = volume.clamp(0.0, 100.0);
+        }
+        if ui.seek_preview.is_some() && !state.seeking {
             ui.seek_preview = None;
         }
     });
+}
+
+fn refresh_playback_diagnostics(
+    api: &MpvApi,
+    handle: *mut c_void,
+    registry: &NativeMediaSourceRegistry,
+    last_playback_state: &Mutex<NativePlaybackState>,
+) {
+    let number_property = |name: &str| {
+        api.get_property(handle, name)
+            .and_then(|value| value.parse::<f64>().ok())
+    };
+    let bool_property = |name: &str| {
+        api.get_property(handle, name)
+            .is_some_and(|value| matches!(value.as_str(), "yes" | "true" | "1"))
+    };
+    // Raccogliamo le property prima del lock: nativeVideoPlayerState() deve poter
+    // clonare lo snapshot senza restare in attesa dietro a query diagnostiche.
+    let cache_duration = number_property("demuxer-cache-duration");
+    let cache_buffering_state = number_property("cache-buffering-state");
+    let cache_speed = number_property("cache-speed");
+    let demuxer_cache_idle = bool_property("demuxer-cache-idle");
+    let demuxer_cache_state = api.get_property(handle, "demuxer-cache-state");
+    let hwdec_current = api
+        .get_property(handle, "hwdec-current")
+        .filter(|value| !value.is_empty() && value != "no");
+    let video_codec = api.get_property(handle, "video-codec");
+    let audio_codec = api.get_property(handle, "audio-codec");
+    let source = registry.current_stats();
+
+    if let Some(stats) = source.as_ref() {
+        let avg_range_ms = if stats.remote_requests > 0 {
+            stats.range_elapsed_ms_total as f64 / stats.remote_requests as f64
+        } else {
+            0.0
+        };
+        let avg_headers_ms = if stats.remote_requests > 0 {
+            stats.range_headers_ms_total as f64 / stats.remote_requests as f64
+        } else {
+            0.0
+        };
+        let avg_body_ms = if stats.remote_requests > 0 {
+            stats.range_body_ms_total as f64 / stats.remote_requests as f64
+        } else {
+            0.0
+        };
+        let useful_ratio = if stats.bytes_received > 0 {
+            stats.bytes_served as f64 / stats.bytes_received as f64
+        } else {
+            0.0
+        };
+        diagnostic_log(format!(
+            "native_player transport_sample remote_requests={} bytes_received={} bytes_served={} useful_ratio={:.3} cache_hits={} cache_misses={} cache_seek_hits={} seeks={} generation={} current_range_bytes={} max_range_bytes={} window_bytes={} current_window_bytes={} avg_headers_ms={:.1} avg_body_ms={:.1} avg_range_ms={:.1} max_range_ms={} blocking_fetches={} blocking_fetch_ms_total={} blocking_fetch_ms_max={} slow_250={} slow_500={} slow_1000={} cache_duration={:?} cache_buffering_state={:?} cache_speed={:?} paused_for_cache={}",
+            stats.remote_requests,
+            stats.bytes_received,
+            stats.bytes_served,
+            useful_ratio,
+            stats.cache_hits,
+            stats.cache_misses,
+            stats.cache_seek_hits,
+            stats.seeks,
+            stats.generation,
+            stats.current_range_bytes,
+            stats.max_range_bytes,
+            stats.window_bytes,
+            stats.current_window_bytes,
+            avg_headers_ms,
+            avg_body_ms,
+            avg_range_ms,
+            stats.range_elapsed_ms_max,
+            stats.blocking_fetches,
+            stats.blocking_fetch_ms_total,
+            stats.blocking_fetch_ms_max,
+            stats.slow_ranges_250ms,
+            stats.slow_ranges_500ms,
+            stats.slow_ranges_1000ms,
+            cache_duration,
+            cache_buffering_state,
+            cache_speed,
+            bool_property("paused-for-cache"),
+        ));
+    }
+
+    if let Ok(mut state) = last_playback_state.lock() {
+        state.cache_duration = cache_duration;
+        state.cache_buffering_state = cache_buffering_state;
+        state.cache_speed = cache_speed;
+        state.demuxer_cache_idle = demuxer_cache_idle;
+        state.demuxer_cache_state = demuxer_cache_state;
+        state.hwdec_current = hwdec_current;
+        state.video_codec = video_codec;
+        state.audio_codec = audio_codec;
+        state.source = source;
+    }
+}
+
+fn capture_playback_state(
+    api: &MpvApi,
+    handle: *mut c_void,
+    _registry: &NativeMediaSourceRegistry,
+    ui_close_requested: &AtomicBool,
+    last_playback_state: &Mutex<NativePlaybackState>,
+) -> NativePlaybackState {
+    let mut state = NativePlaybackState::from_mpv(api, handle);
+    state.ui_close_requested = ui_close_requested.load(Ordering::Acquire);
+
+    if let Ok(mut previous) = last_playback_state.lock() {
+        // I campi diagnostici/cache vengono aggiornati a frequenza piu bassa: non
+        // servono al compositor e leggerli 10 volte al secondo moltiplica le call
+        // sincrone a libmpv senza beneficio per la UI.
+        state.cache_duration = previous.cache_duration;
+        state.cache_buffering_state = previous.cache_buffering_state;
+        state.cache_speed = previous.cache_speed;
+        state.demuxer_cache_idle = previous.demuxer_cache_idle;
+        state.demuxer_cache_state = previous.demuxer_cache_state.clone();
+        state.hwdec_current = previous.hwdec_current.clone();
+        state.video_codec = previous.video_codec.clone();
+        state.audio_codec = previous.audio_codec.clone();
+        state.source = previous.source.clone();
+        state.fullscreen = previous.fullscreen;
+        // mpv puo togliere time-pos/duration durante stop/teardown; alcune build
+        // possono anche esporre temporaneamente time-pos=0 quando idle-active
+        // e gia diventato true. In entrambi i casi lo snapshot terminale deve
+        // conservare l'ultima posizione valida della sessione, non regredire allo
+        // startSeconds (o a zero) proprio mentre la WebView torna visibile.
+        let terminal_idle = state.idle;
+        if terminal_idle || state.time_pos.is_none() {
+            state.time_pos = previous.time_pos;
+        }
+        if terminal_idle || state.duration.is_none() {
+            state.duration = previous.duration;
+        }
+        if state.volume.is_none() {
+            state.volume = previous.volume;
+        }
+        *previous = state.clone();
+    }
+    state
 }
 
 fn player_worker(
@@ -2081,6 +2912,7 @@ fn player_worker(
     receiver: Receiver<PlayerCommand>,
     ready: Sender<Result<String, String>>,
     ui_close_requested: Arc<AtomicBool>,
+    last_playback_state: Arc<Mutex<NativePlaybackState>>,
 ) {
     diagnostic_log(format!(
         "native_player worker=start dll={} render_backend={} hwnd={} initial_fullscreen={}",
@@ -2223,7 +3055,17 @@ fn player_worker(
     let mut webview_hidden = false;
     let mut pending_end_file: Option<Instant> = None;
     let mut last_ui_refresh = Instant::now() - UI_STATE_REFRESH_INTERVAL;
+    let mut last_diagnostic_refresh = Instant::now() - DIAGNOSTIC_STATE_REFRESH_INTERVAL;
     let mut av_ready_logged = false;
+    let mut playback_intro_started: Option<Instant> = None;
+    let mut playback_open_started: Option<Instant> = None;
+    let mut playback_media_ready = false;
+    let mut playback_preroll_started: Option<Instant> = None;
+    let mut playback_restart_seen = false;
+    let mut cache_pause_started: Option<Instant> = None;
+    let mut cache_pause_count: u64 = 0;
+    let mut cache_pause_total_ms: u64 = 0;
+    let mut cache_pause_max_ms: u64 = 0;
 
     while running {
         match receiver.recv_timeout(EVENT_POLL_INTERVAL) {
@@ -2238,15 +3080,36 @@ fn player_worker(
                     response,
                 } => {
                     ui_close_requested.store(false, Ordering::Release);
+                    let intro_started = Instant::now();
+                    let intro_visual_started = intro_started + PLAYBACK_INTRO_AUDIO_LEAD;
+                    playback_intro_started = Some(intro_started);
+                    playback_open_started = Some(intro_started);
+                    playback_media_ready = false;
+                    playback_preroll_started = None;
+                    playback_restart_seen = false;
                     render_shared.update(|ui| {
                         ui.accent = accent_rgb(&accent);
                         ui.time_pos = start_seconds.max(0.0);
                         ui.duration = 0.0;
                         ui.volume = volume.clamp(0.0, 100.0);
-                        ui.paused = false;
+                        ui.paused = true;
                         ui.close_requested = false;
                         ui.seek_preview = None;
+                        ui.intro_visible = true;
+                        ui.controls_visible = true;
+                        ui.controls_hide_at = None;
+                        // Il compositor tiene il primo frame fermo per 250ms: il
+                        // soundtrack resta leggermente avanti senza il mezzo secondo
+                        // di anticipo che risultava eccessivo.
+                        ui.intro_started_at = Some(intro_visual_started);
                     });
+                    diagnostic_log(format!(
+                        "native_player playback_intro=start animation_ms={} audio_lead_ms={} min_visible_ms={}",
+                        PLAYBACK_INTRO_ANIMATION_DURATION.as_millis(),
+                        PLAYBACK_INTRO_AUDIO_LEAD.as_millis(),
+                        PLAYBACK_INTRO_MIN_VISIBLE_DURATION.as_millis(),
+                    ));
+                    set_playback_intro_audio(&app, true, "open_native_compositor_audio_lead");
                     // Il compositor e gia inizializzato: nascondiamo subito la WebView
                     // prima del loadfile, cosi non compare mai il player HTML durante
                     // l'attesa di FILE_LOADED. In caso di errore la ripristiniamo.
@@ -2263,11 +3126,11 @@ fn player_worker(
                     let result = registry.register(source).and_then(|url| {
                         let _ = (&meta, &accent);
                         api.set_property(handle, "force-media-title", title.trim())?;
-                        api.set_property(
-                            handle,
-                            "volume",
-                            &format!("{:.2}", volume.clamp(0.0, 100.0)),
-                        )?;
+                        api.set_property(handle, "volume", &format!("{NATIVE_PLAYBACK_START_VOLUME:.2}"))?;
+                        // Il film deve partire sempre udibile al 100%. Durante il pre-roll
+                        // teniamo pero l'audio mpv mutato per non sovrapporlo al soundtrack
+                        // dell'intro; verrà smutato nello stesso istante del reveal.
+                        api.set_property(handle, "mute", "yes")?;
                         let mut command = vec![
                             "loadfile".to_string(),
                             url,
@@ -2277,18 +3140,33 @@ fn player_worker(
                             command.push("-1".to_string());
                             command.push(format!("start={:.3}", start_seconds));
                         }
+                        // Stesso gate del player WebView: carichiamo subito e lasciamo
+                        // mpv in pausa durante i 9s. La cache può quindi portarsi avanti,
+                        // ma il timestamp di visione non scorre dietro all'intro.
+                        api.set_property(handle, "pause", "yes")?;
                         api.command(handle, &command)?;
-                        api.set_property(handle, "pause", "no")?;
                         Ok(())
                     });
-                    if result.is_err() && webview_hidden {
-                        let restored = set_main_webview_visible(
-                            &app,
-                            true,
-                            "open_failed_native_compositor",
-                        );
-                        if restored {
-                            webview_hidden = false;
+                    if result.is_err() {
+                        set_playback_intro_audio(&app, false, "open_failed_native_compositor");
+                        playback_intro_started = None;
+                        playback_open_started = None;
+                        playback_media_ready = false;
+                        playback_preroll_started = None;
+                        playback_restart_seen = false;
+                        render_shared.update(|ui| {
+                            ui.intro_visible = false;
+                            ui.intro_started_at = None;
+                        });
+                        if webview_hidden {
+                            let restored = set_main_webview_visible(
+                                &app,
+                                true,
+                                "open_failed_native_compositor",
+                            );
+                            if restored {
+                                webview_hidden = false;
+                            }
                         }
                     }
                     match &result {
@@ -2307,7 +3185,8 @@ fn player_worker(
                 PlayerCommand::SetPaused { paused, response } => {
                     let result = api.set_property(handle, "pause", if paused { "yes" } else { "no" });
                     if result.is_ok() {
-                        render_shared.update(|ui| ui.paused = paused);
+                        let now = Instant::now();
+                        render_shared.update(|ui| ui.set_paused(paused, now));
                     }
                     let _ = response.send(result);
                 }
@@ -2344,16 +3223,26 @@ fn player_worker(
                     let _ = response.send(result);
                 }
                 PlayerCommand::Stop { response } => {
+                    let _ = capture_playback_state(
+                        &api,
+                        handle,
+                        &registry,
+                        &ui_close_requested,
+                        &last_playback_state,
+                    );
                     let result = api.command(handle, &["stop".to_string()]);
                     let _ = response.send(result);
                 }
-                PlayerCommand::GetState { response } => {
-                    let mut state = NativePlaybackState::from_mpv(&api, handle);
-                    state.source = registry.current_stats();
-                    state.ui_close_requested = ui_close_requested.load(Ordering::Acquire);
-                    let _ = response.send(Ok(state));
+                PlayerCommand::Shutdown => {
+                    let _ = capture_playback_state(
+                        &api,
+                        handle,
+                        &registry,
+                        &ui_close_requested,
+                        &last_playback_state,
+                    );
+                    running = false;
                 }
-                PlayerCommand::Shutdown => running = false,
             },
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => running = false,
@@ -2368,7 +3257,8 @@ fn player_worker(
                     let desired = !paused;
                     match api.set_property(handle, "pause", if desired { "yes" } else { "no" }) {
                         Ok(()) => {
-                            render_shared.update(|ui| ui.paused = desired);
+                            let now = Instant::now();
+                            render_shared.update(|ui| ui.set_paused(desired, now));
                             diagnostic_log(format!(
                                 "native_player ui_action=play_pause paused={desired}"
                             ));
@@ -2434,7 +3324,10 @@ fn player_worker(
                         let desired = !current;
                         match window.set_fullscreen(desired) {
                             Ok(()) => {
-                                render_shared.update(|ui| ui.fullscreen = desired);
+                                render_shared.update(|ui| ui.set_fullscreen(desired, Instant::now()));
+                                if let Ok(mut snapshot) = last_playback_state.lock() {
+                                    snapshot.fullscreen = desired;
+                                }
                                 render_shared.focus_requested.store(true, Ordering::Release);
                                 diagnostic_log(format!(
                                     "native_player ui_action=fullscreen value={desired}"
@@ -2447,15 +3340,28 @@ fn player_worker(
                     }
                 }
                 SurfaceAction::RequestClose => {
+                    let close_started = Instant::now();
                     render_shared.update(|ui| ui.close_requested = true);
+                    render_shared.shutdown.store(true, Ordering::Release);
                     ui_close_requested.store(true, Ordering::Release);
+                    let final_state = last_playback_state
+                        .lock()
+                        .map(|mut state| {
+                            state.ui_close_requested = true;
+                            state.clone()
+                        })
+                        .unwrap_or_default();
+                    diagnostic_log(format!(
+                        "native_player progress_snapshot=close_cached time_pos={:?} duration={:?}",
+                        final_state.time_pos, final_state.duration
+                    ));
 
                     if let Some(window) = app.get_window(MAIN_WINDOW_LABEL) {
                         let current = window.is_fullscreen().unwrap_or(false);
                         if current != initial_fullscreen {
                             match window.set_fullscreen(initial_fullscreen) {
                                 Ok(()) => {
-                                    render_shared.update(|ui| ui.fullscreen = initial_fullscreen);
+                                    render_shared.update(|ui| ui.set_fullscreen(initial_fullscreen, Instant::now()));
                                     diagnostic_log(format!(
                                         "native_player ui_action=close_restore_fullscreen value={}",
                                         initial_fullscreen
@@ -2472,9 +3378,11 @@ fn player_worker(
                     // In questo modo non mostriamo il vecchio player HTML sopra un compositor
                     // ancora vivo e non chiediamo alla WebView nascosta di arrestare il worker.
                     running = false;
-                    diagnostic_log(
-                        "native_player ui_action=close_requested teardown=native_first",
-                    );
+                    let close_dispatch_elapsed = close_started.elapsed();
+                    diagnostic_log(format!(
+                        "native_player ui_action=close_requested teardown=native_first dispatch_ms={}",
+                        close_dispatch_elapsed.as_millis(),
+                    ));
                 }
             }
         }
@@ -2490,9 +3398,13 @@ fn player_worker(
             }
             if event_id == MPV_EVENT_FILE_LOADED {
                 pending_end_file = None;
+                playback_media_ready = true;
                 diagnostic_log(format!(
-                    "native_player event=file_loaded player_backend=libmpv media_source=native_media_source ui={}",
-                    UI_NAME
+                    "native_player event=file_loaded player_backend=libmpv media_source=native_media_source ui={} open_to_file_loaded_ms={}",
+                    UI_NAME,
+                    playback_open_started
+                        .map(|started| started.elapsed().as_millis())
+                        .unwrap_or(0),
                 ));
                 if !webview_hidden {
                     webview_hidden = set_main_webview_visible(&app, false, "file_loaded_native_compositor");
@@ -2500,7 +3412,22 @@ fn player_worker(
                 render_shared.focus_requested.store(true, Ordering::Release);
                 render_shared.mark_dirty();
             }
+            if event_id == MPV_EVENT_PLAYBACK_RESTART {
+                if playback_preroll_started.is_some() {
+                    playback_restart_seen = true;
+                    diagnostic_log(
+                        "native_player event=playback_restart intro_preroll=true first_playback_frame_gate=ready",
+                    );
+                }
+            }
             if event_id == MPV_EVENT_END_FILE {
+                let _ = capture_playback_state(
+                    &api,
+                    handle,
+                    &registry,
+                    &ui_close_requested,
+                    &last_playback_state,
+                );
                 diagnostic_log(format!(
                     "native_player event=end_file player_backend=libmpv ui={} action=wait_idle",
                     UI_NAME
@@ -2518,6 +3445,85 @@ fn player_worker(
         }
 
         if running {
+            if let Some(started) = playback_intro_started {
+                let elapsed = started.elapsed();
+
+                // Il soundtrack e gia partito da 250ms quando la timeline visiva
+                // comincia. I 9s dei keyframe restano identici al WebView; raggiunto
+                // il frame finale, mpv esegue il breve pre-roll sotto l'overlay,
+                // ancora mutato, cosi il primo frame scoperto non e nero.
+                if elapsed >= PLAYBACK_INTRO_MIN_VISIBLE_DURATION
+                    && playback_media_ready
+                    && playback_preroll_started.is_none()
+                {
+                    match api.set_property(handle, "pause", "no") {
+                        Ok(()) => {
+                            playback_preroll_started = Some(Instant::now());
+                            render_shared.update(|ui| ui.set_paused(false, Instant::now()));
+                            diagnostic_log(
+                                "native_player playback_intro=preroll_start media_ready=true muted=true",
+                            );
+                        }
+                        Err(error) => diagnostic_log(format!(
+                            "native_player playback_intro=preroll_start error={error}"
+                        )),
+                    }
+                }
+
+                if elapsed >= PLAYBACK_INTRO_MIN_VISIBLE_DURATION {
+                    if let Some(preroll_started) = playback_preroll_started {
+                        let preroll_elapsed = preroll_started.elapsed();
+                        let restart_ready = playback_restart_seen
+                            && preroll_elapsed >= PLAYBACK_INTRO_PREROLL_MIN;
+                        let failsafe_ready = preroll_elapsed >= PLAYBACK_INTRO_PREROLL_FAILSAFE;
+                        if restart_ready || failsafe_ready {
+                            // Reimponiamo 100 immediatamente prima del reveal: in questo modo
+                            // eventuali valori ereditati/aggiornati durante loadfile non possono
+                            // lasciare il film silenzioso al primo frame visibile.
+                            let volume_restore = api.set_property(
+                                handle,
+                                "volume",
+                                &format!("{NATIVE_PLAYBACK_START_VOLUME:.2}"),
+                            );
+                            let unmute = api.set_property(handle, "mute", "no");
+                            match (&volume_restore, &unmute) {
+                                (Ok(()), Ok(())) => diagnostic_log(format!(
+                                    "native_player playback_intro=complete media_ready=true preroll_ms={} playback_restart={} volume=100 unmute=true open_to_reveal_ms={}",
+                                    preroll_elapsed.as_millis(),
+                                    playback_restart_seen,
+                                    playback_open_started
+                                        .map(|started| started.elapsed().as_millis())
+                                        .unwrap_or(0),
+                                )),
+                                (volume_result, mute_result) => diagnostic_log(format!(
+                                    "native_player playback_intro=complete media_ready=true preroll_ms={} playback_restart={} volume_restore={:?} unmute={:?} open_to_reveal_ms={}",
+                                    preroll_elapsed.as_millis(),
+                                    playback_restart_seen,
+                                    volume_result.as_ref().err(),
+                                    mute_result.as_ref().err(),
+                                    playback_open_started
+                                        .map(|started| started.elapsed().as_millis())
+                                        .unwrap_or(0),
+                                )),
+                            }
+                            let controls_now = Instant::now();
+                            render_shared.update(|ui| {
+                                ui.intro_visible = false;
+                                ui.intro_started_at = None;
+                                ui.paused = false;
+                                ui.volume = NATIVE_PLAYBACK_START_VOLUME;
+                                ui.show_controls(controls_now);
+                            });
+                            set_playback_intro_audio(&app, false, "playback_intro_complete");
+                            playback_intro_started = None;
+                            playback_open_started = None;
+                            playback_preroll_started = None;
+                            playback_restart_seen = false;
+                        }
+                    }
+                }
+            }
+
             if let Some(started) = pending_end_file {
                 if started.elapsed() >= Duration::from_millis(300) {
                     let idle = api
@@ -2532,7 +3538,7 @@ fn player_worker(
                             let current = window.is_fullscreen().unwrap_or(false);
                             if current != initial_fullscreen {
                                 let _ = window.set_fullscreen(initial_fullscreen);
-                                render_shared.update(|ui| ui.fullscreen = initial_fullscreen);
+                                render_shared.update(|ui| ui.set_fullscreen(initial_fullscreen, Instant::now()));
                             }
                         }
 
@@ -2545,35 +3551,183 @@ fn player_worker(
             }
 
             if last_ui_refresh.elapsed() >= UI_STATE_REFRESH_INTERVAL {
-                update_render_state_from_mpv(&api, handle, &render_shared);
-                if !av_ready_logged {
-                    let video_codec = api.get_property(handle, "video-codec");
-                    let audio_codec = api.get_property(handle, "audio-codec");
-                    if video_codec.is_some() || audio_codec.is_some() {
-                        let volume = api.get_property(handle, "volume").unwrap_or_else(|| "?".to_string());
+                let refresh_started = Instant::now();
+                let snapshot = capture_playback_state(
+                    &api,
+                    handle,
+                    &registry,
+                    &ui_close_requested,
+                    &last_playback_state,
+                );
+                update_render_state_from_snapshot(&snapshot, &render_shared);
+
+                if snapshot.paused_for_cache {
+                    if cache_pause_started.is_none() {
+                        cache_pause_started = Some(Instant::now());
+                        cache_pause_count = cache_pause_count.saturating_add(1);
                         diagnostic_log(format!(
-                            "native_player av_ready video_codec={} audio_codec={} volume={}",
-                            video_codec.as_deref().unwrap_or("none"),
-                            audio_codec.as_deref().unwrap_or("none"),
-                            volume
+                            "native_player transport_event=cache_pause_start count={} time_pos={:?} cache_duration={:?}",
+                            cache_pause_count,
+                            snapshot.time_pos,
+                            snapshot.cache_duration,
                         ));
-                        av_ready_logged = true;
                     }
+                } else if let Some(started) = cache_pause_started.take() {
+                    let pause_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+                    cache_pause_total_ms = cache_pause_total_ms.saturating_add(pause_ms);
+                    cache_pause_max_ms = cache_pause_max_ms.max(pause_ms);
+                    diagnostic_log(format!(
+                        "native_player transport_event=cache_pause_end duration_ms={} total_ms={} max_ms={}",
+                        pause_ms,
+                        cache_pause_total_ms,
+                        cache_pause_max_ms,
+                    ));
                 }
-                if let Some(window) = app.get_window(MAIN_WINDOW_LABEL) {
-                    let fullscreen = window.is_fullscreen().unwrap_or(false);
-                    render_shared.update(|ui| ui.fullscreen = fullscreen);
+
+                let elapsed = refresh_started.elapsed();
+                if elapsed >= SLOW_OPERATION_LOG_THRESHOLD {
+                    diagnostic_log(format!(
+                        "native_player latency=slow operation=fast_state_refresh elapsed_ms={}",
+                        elapsed.as_millis(),
+                    ));
                 }
                 last_ui_refresh = Instant::now();
+            }
+
+            if last_diagnostic_refresh.elapsed() >= DIAGNOSTIC_STATE_REFRESH_INTERVAL {
+                let refresh_started = Instant::now();
+                refresh_playback_diagnostics(&api, handle, &registry, &last_playback_state);
+                if !av_ready_logged {
+                    if let Ok(snapshot) = last_playback_state.lock() {
+                        if snapshot.video_codec.is_some() || snapshot.audio_codec.is_some() {
+                            diagnostic_log(format!(
+                                "native_player av_ready video_codec={} audio_codec={} volume={}",
+                                snapshot.video_codec.as_deref().unwrap_or("none"),
+                                snapshot.audio_codec.as_deref().unwrap_or("none"),
+                                snapshot.volume.map(|value| format!("{value:.1}")).unwrap_or_else(|| "?".to_string()),
+                            ));
+                            av_ready_logged = true;
+                        }
+                    }
+                }
+                let elapsed = refresh_started.elapsed();
+                if elapsed >= SLOW_OPERATION_LOG_THRESHOLD {
+                    diagnostic_log(format!(
+                        "native_player latency=slow operation=diagnostic_state_refresh elapsed_ms={}",
+                        elapsed.as_millis(),
+                    ));
+                }
+                last_diagnostic_refresh = Instant::now();
             }
         }
     }
 
+    let teardown_started = Instant::now();
+    set_playback_intro_audio(&app, false, "native_player_teardown");
     render_shared.shutdown.store(true, Ordering::Release);
     render_shared.mark_dirty();
     let _ = render_worker.join();
 
+    // Ultima lettura con l'handle mpv ancora valido. E intenzionalmente dopo
+    // il teardown del compositor ma prima di mpv_terminate_destroy: la WebView
+    // ricevera questo snapshot anche se il timer JS e rimasto sospeso per tutto
+    // il playback nativo.
+    let final_state = if ui_close_requested.load(Ordering::Acquire) {
+        last_playback_state
+            .lock()
+            .map(|state| state.clone())
+            .unwrap_or_default()
+    } else {
+        capture_playback_state(
+            &api,
+            handle,
+            &registry,
+            &ui_close_requested,
+            &last_playback_state,
+        )
+    };
+    diagnostic_log(format!(
+        "native_player progress_snapshot=teardown time_pos={:?} duration={:?} idle={}",
+        final_state.time_pos, final_state.duration, final_state.idle
+    ));
+
+    if let Some(started) = cache_pause_started.take() {
+        let pause_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        cache_pause_total_ms = cache_pause_total_ms.saturating_add(pause_ms);
+        cache_pause_max_ms = cache_pause_max_ms.max(pause_ms);
+    }
+    if let Some(stats) = registry.current_stats() {
+        let useful_ratio = if stats.bytes_received > 0 {
+            stats.bytes_served as f64 / stats.bytes_received as f64
+        } else {
+            0.0
+        };
+        let avg_range_ms = if stats.remote_requests > 0 {
+            stats.range_elapsed_ms_total as f64 / stats.remote_requests as f64
+        } else {
+            0.0
+        };
+        let avg_headers_ms = if stats.remote_requests > 0 {
+            stats.range_headers_ms_total as f64 / stats.remote_requests as f64
+        } else {
+            0.0
+        };
+        let avg_body_ms = if stats.remote_requests > 0 {
+            stats.range_body_ms_total as f64 / stats.remote_requests as f64
+        } else {
+            0.0
+        };
+        let avg_blocking_fetch_ms = if stats.blocking_fetches > 0 {
+            stats.blocking_fetch_ms_total as f64 / stats.blocking_fetches as f64
+        } else {
+            0.0
+        };
+        diagnostic_log(format!(
+            "native_player transport_summary remote_requests={} bytes_requested={} bytes_received={} bytes_served={} useful_ratio={:.3} cache_hits={} cache_misses={} cache_seek_hits={} seeks={} generation={} metadata_ms={} first_range_headers_ms={} first_range_body_ms={} first_range_elapsed_ms={} avg_headers_ms={:.1} avg_body_ms={:.1} avg_range_ms={:.1} max_range_ms={} blocking_fetches={} avg_blocking_fetch_ms={:.1} blocking_fetch_ms_total={} blocking_fetch_ms_max={} slow_250={} slow_500={} slow_1000={} seek_distance_bytes_total={} seek_distance_bytes_max={} max_range_bytes={} window_bytes={} cache_pause_count={} cache_pause_total_ms={} cache_pause_max_ms={}",
+            stats.remote_requests,
+            stats.bytes_requested,
+            stats.bytes_received,
+            stats.bytes_served,
+            useful_ratio,
+            stats.cache_hits,
+            stats.cache_misses,
+            stats.cache_seek_hits,
+            stats.seeks,
+            stats.generation,
+            stats.metadata_elapsed_ms,
+            stats.first_range_headers_ms,
+            stats.first_range_body_ms,
+            stats.first_range_elapsed_ms,
+            avg_headers_ms,
+            avg_body_ms,
+            avg_range_ms,
+            stats.range_elapsed_ms_max,
+            stats.blocking_fetches,
+            avg_blocking_fetch_ms,
+            stats.blocking_fetch_ms_total,
+            stats.blocking_fetch_ms_max,
+            stats.slow_ranges_250ms,
+            stats.slow_ranges_500ms,
+            stats.slow_ranges_1000ms,
+            stats.seek_distance_bytes_total,
+            stats.seek_distance_bytes_max,
+            stats.max_range_bytes,
+            stats.window_bytes,
+            cache_pause_count,
+            cache_pause_total_ms,
+            cache_pause_max_ms,
+        ));
+    }
+
+    let destroy_started = Instant::now();
     unsafe { (api.terminate_destroy)(handle) };
+    let destroy_elapsed = destroy_started.elapsed();
+    if destroy_elapsed >= SLOW_OPERATION_LOG_THRESHOLD {
+        diagnostic_log(format!(
+            "native_player latency=slow operation=mpv_terminate_destroy elapsed_ms={}",
+            destroy_elapsed.as_millis(),
+        ));
+    }
     if webview_hidden {
         let reason = if ui_close_requested.load(Ordering::Acquire) {
             "native_compositor_closed_before_webview"
@@ -2587,8 +3741,9 @@ fn player_worker(
         let _ = window.set_focus();
     }
     diagnostic_log(format!(
-        "native_player event=closed player_backend=libmpv ui={}",
-        UI_NAME
+        "native_player event=closed player_backend=libmpv ui={} teardown_ms={}",
+        UI_NAME,
+        teardown_started.elapsed().as_millis(),
     ));
 }
 
@@ -2851,10 +4006,16 @@ pub async fn baia_core_native_player_open(
     let start_seconds = start_seconds
         .filter(|value| value.is_finite() && *value >= 0.0)
         .unwrap_or(0.0);
-    let volume = volume
+    let requested_volume = volume
         .filter(|value| value.is_finite())
-        .unwrap_or(100.0)
+        .unwrap_or(NATIVE_PLAYBACK_START_VOLUME)
         .clamp(0.0, 100.0);
+    let volume = NATIVE_PLAYBACK_START_VOLUME;
+    if (requested_volume - volume).abs() > f64::EPSILON {
+        diagnostic_log(format!(
+            "native_player open=volume_override requested={requested_volume:.1} applied={volume:.1}"
+        ));
+    }
 
     match player.open(
         media_source,
@@ -2891,17 +4052,17 @@ pub async fn baia_core_native_player_open(
 }
 
 #[tauri::command]
-pub fn baia_core_native_player_play(player: State<'_, NativePlayerState>) -> Result<(), String> {
+pub async fn baia_core_native_player_play(player: State<'_, NativePlayerState>) -> Result<(), String> {
     player.set_paused(false)
 }
 
 #[tauri::command]
-pub fn baia_core_native_player_pause(player: State<'_, NativePlayerState>) -> Result<(), String> {
+pub async fn baia_core_native_player_pause(player: State<'_, NativePlayerState>) -> Result<(), String> {
     player.set_paused(true)
 }
 
 #[tauri::command]
-pub fn baia_core_native_player_seek(
+pub async fn baia_core_native_player_seek(
     seconds: f64,
     player: State<'_, NativePlayerState>,
 ) -> Result<(), String> {
@@ -2909,7 +4070,7 @@ pub fn baia_core_native_player_seek(
 }
 
 #[tauri::command]
-pub fn baia_core_native_player_set_volume(
+pub async fn baia_core_native_player_set_volume(
     value: f64,
     player: State<'_, NativePlayerState>,
 ) -> Result<(), String> {
@@ -2917,14 +4078,14 @@ pub fn baia_core_native_player_set_volume(
 }
 
 #[tauri::command]
-pub fn baia_core_native_player_get_state(
+pub async fn baia_core_native_player_get_state(
     player: State<'_, NativePlayerState>,
 ) -> Result<NativePlaybackState, String> {
     player.playback_state()
 }
 
 #[tauri::command]
-pub fn baia_core_native_player_stop(
+pub async fn baia_core_native_player_stop(
     app: AppHandle,
     player: State<'_, NativePlayerState>,
 ) -> Result<bool, String> {

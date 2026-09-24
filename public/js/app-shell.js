@@ -237,6 +237,9 @@ function startAppIntroController() {
 
 
 
+// I keyframe WebView restano da 9s. Nel compositor nativo il soundtrack
+// parte subito; è la timeline visiva ad attendere 500ms prima di avanzare,
+// così l'audio risulta anticipato senza troncare l'inizio della traccia.
 const PLAYBACK_INTRO_DURATION_MS = 9000;
 const playbackIntroState = { runId: 0, timer: 0, resolve: null };
 
@@ -247,6 +250,25 @@ function stopPlaybackIntroAudio({ reset = false } = {}) {
     audio.pause();
     if (reset) audio.currentTime = 0;
   } catch {}
+}
+
+function startPlaybackIntroAudioOnly() {
+  const audio = elements.playbackIntroAudio;
+  if (!IS_NATIVE_APP || !audio) return false;
+
+  stopPlaybackIntroAudio({ reset: true });
+  audio.volume = 0.82;
+  try { audio.currentTime = 0; } catch {}
+  try {
+    const attempt = audio.play();
+    if (attempt?.catch) attempt.catch(() => {});
+  } catch {}
+  return true;
+}
+
+function stopPlaybackIntroAudioOnly() {
+  stopPlaybackIntroAudio({ reset: true });
+  return true;
 }
 
 function finishPlaybackIntro(runId, { cancelled = false } = {}) {
@@ -287,13 +309,7 @@ function startPlaybackIntro() {
   void elements.playbackIntro.offsetWidth;
   elements.playbackIntro.classList.add('is-active');
 
-  const audio = elements.playbackIntroAudio;
-  if (audio) {
-    audio.volume = 0.82;
-    try { audio.currentTime = 0; } catch {}
-    const attempt = audio.play();
-    if (attempt?.catch) attempt.catch(() => {});
-  }
+  startPlaybackIntroAudioOnly();
 
   return new Promise((resolve) => {
     playbackIntroState.resolve = resolve;
@@ -2049,4 +2065,6 @@ window.BaiaShell = Object.freeze({
   musicCommand,
   musicState: currentMusicSnapshot,
   playbackIntro: startPlaybackIntro,
+  playbackIntroAudio: startPlaybackIntroAudioOnly,
+  stopPlaybackIntroAudio: stopPlaybackIntroAudioOnly,
 });

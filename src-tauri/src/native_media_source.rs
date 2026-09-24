@@ -62,6 +62,24 @@ pub struct NativeMediaSourceStats {
     pub sequential_fetches: u64,
     pub pool_slot_0_requests: u64,
     pub pool_slot_1_requests: u64,
+    pub metadata_elapsed_ms: u64,
+    pub blocking_fetches: u64,
+    pub blocking_fetch_ms_total: u64,
+    pub blocking_fetch_ms_max: u64,
+    pub range_headers_ms_total: u64,
+    pub range_headers_ms_max: u64,
+    pub range_body_ms_total: u64,
+    pub range_body_ms_max: u64,
+    pub range_elapsed_ms_total: u64,
+    pub range_elapsed_ms_max: u64,
+    pub first_range_headers_ms: u64,
+    pub first_range_body_ms: u64,
+    pub first_range_elapsed_ms: u64,
+    pub slow_ranges_250ms: u64,
+    pub slow_ranges_500ms: u64,
+    pub slow_ranges_1000ms: u64,
+    pub seek_distance_bytes_total: u64,
+    pub seek_distance_bytes_max: u64,
 }
 
 #[derive(Default)]
@@ -85,6 +103,24 @@ struct NativeMediaSourceMetrics {
     sequential_fetches: AtomicU64,
     pool_slot_0_requests: AtomicU64,
     pool_slot_1_requests: AtomicU64,
+    metadata_elapsed_ms: AtomicU64,
+    blocking_fetches: AtomicU64,
+    blocking_fetch_ms_total: AtomicU64,
+    blocking_fetch_ms_max: AtomicU64,
+    range_headers_ms_total: AtomicU64,
+    range_headers_ms_max: AtomicU64,
+    range_body_ms_total: AtomicU64,
+    range_body_ms_max: AtomicU64,
+    range_elapsed_ms_total: AtomicU64,
+    range_elapsed_ms_max: AtomicU64,
+    first_range_headers_ms: AtomicU64,
+    first_range_body_ms: AtomicU64,
+    first_range_elapsed_ms: AtomicU64,
+    slow_ranges_250ms: AtomicU64,
+    slow_ranges_500ms: AtomicU64,
+    slow_ranges_1000ms: AtomicU64,
+    seek_distance_bytes_total: AtomicU64,
+    seek_distance_bytes_max: AtomicU64,
     has_last_range: AtomicBool,
 }
 
@@ -114,6 +150,24 @@ impl NativeMediaSourceMetrics {
             sequential_fetches: self.sequential_fetches.load(Ordering::Relaxed),
             pool_slot_0_requests: self.pool_slot_0_requests.load(Ordering::Relaxed),
             pool_slot_1_requests: self.pool_slot_1_requests.load(Ordering::Relaxed),
+            metadata_elapsed_ms: self.metadata_elapsed_ms.load(Ordering::Relaxed),
+            blocking_fetches: self.blocking_fetches.load(Ordering::Relaxed),
+            blocking_fetch_ms_total: self.blocking_fetch_ms_total.load(Ordering::Relaxed),
+            blocking_fetch_ms_max: self.blocking_fetch_ms_max.load(Ordering::Relaxed),
+            range_headers_ms_total: self.range_headers_ms_total.load(Ordering::Relaxed),
+            range_headers_ms_max: self.range_headers_ms_max.load(Ordering::Relaxed),
+            range_body_ms_total: self.range_body_ms_total.load(Ordering::Relaxed),
+            range_body_ms_max: self.range_body_ms_max.load(Ordering::Relaxed),
+            range_elapsed_ms_total: self.range_elapsed_ms_total.load(Ordering::Relaxed),
+            range_elapsed_ms_max: self.range_elapsed_ms_max.load(Ordering::Relaxed),
+            first_range_headers_ms: self.first_range_headers_ms.load(Ordering::Relaxed),
+            first_range_body_ms: self.first_range_body_ms.load(Ordering::Relaxed),
+            first_range_elapsed_ms: self.first_range_elapsed_ms.load(Ordering::Relaxed),
+            slow_ranges_250ms: self.slow_ranges_250ms.load(Ordering::Relaxed),
+            slow_ranges_500ms: self.slow_ranges_500ms.load(Ordering::Relaxed),
+            slow_ranges_1000ms: self.slow_ranges_1000ms.load(Ordering::Relaxed),
+            seek_distance_bytes_total: self.seek_distance_bytes_total.load(Ordering::Relaxed),
+            seek_distance_bytes_max: self.seek_distance_bytes_max.load(Ordering::Relaxed),
         }
     }
 }
@@ -272,7 +326,13 @@ fn request_media(
 }
 
 fn resolve_metadata(template: &NativeMediaSourceTemplate) -> Result<SourceMetadata, String> {
+    let started = Instant::now();
     let response = request_media(template, &template.metadata_client, "HEAD", None, None)?;
+    let elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    template
+        .metrics
+        .metadata_elapsed_ms
+        .store(elapsed_ms, Ordering::Relaxed);
     if response.status().is_redirection() || !response.status().is_success() {
         return Err(format!(
             "Il Connector ha rifiutato l'apertura NativeMediaSource con status {}.",
@@ -403,10 +463,12 @@ impl NativeMediaStream {
         self.next_pool_slot = (self.next_pool_slot + 1) % MEDIA_POOL_SIZE;
         let started = Instant::now();
 
-        self.template
+        let request_index = self
+            .template
             .metrics
             .remote_requests
-            .fetch_add(1, Ordering::Relaxed);
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
         self.template
             .metrics
             .bytes_requested
@@ -439,6 +501,15 @@ impl NativeMediaStream {
             Some(range),
             self.if_range.clone(),
         );
+        let headers_elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        self.template
+            .metrics
+            .range_headers_ms_total
+            .fetch_add(headers_elapsed_ms, Ordering::Relaxed);
+        self.template
+            .metrics
+            .range_headers_ms_max
+            .fetch_max(headers_elapsed_ms, Ordering::Relaxed);
         let response = match response {
             Ok(value) => value,
             Err(error) => {
@@ -486,10 +557,20 @@ impl NativeMediaStream {
         // modo la connessione HTTP/TLS può tornare nel pool e non viene abortita
         // quando mpv cambia posizione. Il seek successivo partirà da 1 MiB.
         let mut bytes = Vec::with_capacity(expected as usize);
+        let body_started = Instant::now();
         response
             .take(expected.saturating_add(1))
             .read_to_end(&mut bytes)
             .map_err(|error| format!("Lettura Range NativeMediaSource fallita: {error}"))?;
+        let body_elapsed_ms = body_started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        self.template
+            .metrics
+            .range_body_ms_total
+            .fetch_add(body_elapsed_ms, Ordering::Relaxed);
+        self.template
+            .metrics
+            .range_body_ms_max
+            .fetch_max(body_elapsed_ms, Ordering::Relaxed);
         if bytes.len() as u64 != expected {
             self.template.metrics.errors.fetch_add(1, Ordering::Relaxed);
             return Err(format!(
@@ -499,6 +580,37 @@ impl NativeMediaStream {
         }
 
         let elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        self.template
+            .metrics
+            .range_elapsed_ms_total
+            .fetch_add(elapsed_ms, Ordering::Relaxed);
+        self.template
+            .metrics
+            .range_elapsed_ms_max
+            .fetch_max(elapsed_ms, Ordering::Relaxed);
+        if request_index == 1 {
+            self.template
+                .metrics
+                .first_range_headers_ms
+                .store(headers_elapsed_ms, Ordering::Relaxed);
+            self.template
+                .metrics
+                .first_range_body_ms
+                .store(body_elapsed_ms, Ordering::Relaxed);
+            self.template
+                .metrics
+                .first_range_elapsed_ms
+                .store(elapsed_ms, Ordering::Relaxed);
+        }
+        if elapsed_ms >= 250 {
+            self.template.metrics.slow_ranges_250ms.fetch_add(1, Ordering::Relaxed);
+        }
+        if elapsed_ms >= 500 {
+            self.template.metrics.slow_ranges_500ms.fetch_add(1, Ordering::Relaxed);
+        }
+        if elapsed_ms >= 1000 {
+            self.template.metrics.slow_ranges_1000ms.fetch_add(1, Ordering::Relaxed);
+        }
         self.template
             .metrics
             .bytes_received
@@ -523,14 +635,21 @@ impl NativeMediaStream {
             .store(self.sequential_fetches, Ordering::Relaxed);
 
         eprintln!(
-            "native_media_source event=range generation={} pool_slot={} requested_start={} requested_end={} requested_bytes={} bytes_received={} elapsed_ms={} sequential_fetches={} cache_start={} cache_end={} cache_window_bytes={}",
+            "native_media_source event=range generation={} pool_slot={} requested_start={} requested_end={} requested_bytes={} bytes_received={} headers_ms={} body_ms={} elapsed_ms={} throughput_mib_s={:.2} sequential_fetches={} cache_start={} cache_end={} cache_window_bytes={}",
             self.generation,
             pool_slot,
             start,
             end,
             expected,
             expected,
+            headers_elapsed_ms,
+            body_elapsed_ms,
             elapsed_ms,
+            if elapsed_ms > 0 {
+                (expected as f64 / (1024.0 * 1024.0)) / (elapsed_ms as f64 / 1000.0)
+            } else {
+                0.0
+            },
             self.sequential_fetches,
             self.cache_start,
             self.cache_end(),
@@ -544,7 +663,18 @@ impl NativeMediaStream {
             return Ok(0);
         }
         if self.cached_offset().is_none() {
+            let blocked_started = Instant::now();
             self.fetch_range()?;
+            let blocked_ms = blocked_started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+            self.template.metrics.blocking_fetches.fetch_add(1, Ordering::Relaxed);
+            self.template
+                .metrics
+                .blocking_fetch_ms_total
+                .fetch_add(blocked_ms, Ordering::Relaxed);
+            self.template
+                .metrics
+                .blocking_fetch_ms_max
+                .fetch_max(blocked_ms, Ordering::Relaxed);
         } else {
             self.template.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
         }
@@ -570,9 +700,23 @@ impl NativeMediaStream {
             return Err("Seek NativeMediaSource fuori dal file.".to_string());
         }
         let offset = offset as u64;
+        let previous_position = self.position;
+        let seek_distance = if offset >= previous_position {
+            offset - previous_position
+        } else {
+            previous_position - offset
+        };
         let cache_hit = self.offset_is_cached(offset);
         self.position = offset;
         self.template.metrics.seeks.fetch_add(1, Ordering::Relaxed);
+        self.template
+            .metrics
+            .seek_distance_bytes_total
+            .fetch_add(seek_distance, Ordering::Relaxed);
+        self.template
+            .metrics
+            .seek_distance_bytes_max
+            .fetch_max(seek_distance, Ordering::Relaxed);
 
         if cache_hit {
             self.template
@@ -816,7 +960,7 @@ unsafe extern "C" fn stream_close_callback(cookie: *mut c_void) {
         if let Ok(stream) = cookie.stream.lock() {
             let stats = stream.template.stats();
             eprintln!(
-                "native_media_source event=close remote_requests={} bytes_requested={} bytes_received={} bytes_served_to_mpv={} cache_hits={} cache_misses={} cache_seek_hits={} seeks={} errors={} generation={} pool_slot_0_requests={} pool_slot_1_requests={}",
+                "native_media_source event=close remote_requests={} bytes_requested={} bytes_received={} bytes_served_to_mpv={} cache_hits={} cache_misses={} cache_seek_hits={} seeks={} errors={} generation={} pool_slot_0_requests={} pool_slot_1_requests={} metadata_ms={} blocking_fetches={} blocking_fetch_ms_total={} blocking_fetch_ms_max={} range_headers_ms_total={} range_headers_ms_max={} range_body_ms_total={} range_body_ms_max={} range_elapsed_ms_total={} range_elapsed_ms_max={} first_range_headers_ms={} first_range_body_ms={} first_range_elapsed_ms={} slow_250={} slow_500={} slow_1000={} seek_distance_bytes_total={} seek_distance_bytes_max={}",
                 stats.remote_requests,
                 stats.bytes_requested,
                 stats.bytes_received,
@@ -829,6 +973,24 @@ unsafe extern "C" fn stream_close_callback(cookie: *mut c_void) {
                 stats.generation,
                 stats.pool_slot_0_requests,
                 stats.pool_slot_1_requests,
+                stats.metadata_elapsed_ms,
+                stats.blocking_fetches,
+                stats.blocking_fetch_ms_total,
+                stats.blocking_fetch_ms_max,
+                stats.range_headers_ms_total,
+                stats.range_headers_ms_max,
+                stats.range_body_ms_total,
+                stats.range_body_ms_max,
+                stats.range_elapsed_ms_total,
+                stats.range_elapsed_ms_max,
+                stats.first_range_headers_ms,
+                stats.first_range_body_ms,
+                stats.first_range_elapsed_ms,
+                stats.slow_ranges_250ms,
+                stats.slow_ranges_500ms,
+                stats.slow_ranges_1000ms,
+                stats.seek_distance_bytes_total,
+                stats.seek_distance_bytes_max,
             );
         }
         drop(cookie);

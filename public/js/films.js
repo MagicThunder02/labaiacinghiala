@@ -1246,6 +1246,46 @@ function observeProgressPlayback() {
   if (state.progressPlaybackSinceSave >= PROGRESS_CHECKPOINT_SECONDS) saveProgress(false);
 }
 
+function nativePlaybackNumber(value) {
+  // Option<f64>::None arriva da Rust come null: Number(null) === 0, quindi
+  // non va mai convertito alla cieca o una property temporaneamente assente
+  // diventa falsamente "inizio film".
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function importNativePlaybackSnapshot(playback) {
+  const seconds = nativePlaybackNumber(playback?.timePos);
+  const duration = nativePlaybackNumber(playback?.duration);
+  const nativeVolume = nativePlaybackNumber(playback?.volume);
+
+  state.nativePlaybackPaused = Boolean(playback?.paused);
+  state.nativePlaybackIdle = Boolean(playback?.idle);
+  state.nativePlaybackSeeking = Boolean(playback?.seeking);
+  state.nativePlaybackBuffering = Boolean(playback?.pausedForCache);
+  if (seconds !== null) state.nativePlaybackLastSeconds = Math.max(0, seconds);
+  if (duration !== null) state.nativePlaybackLastDuration = Math.max(0, duration);
+  if (nativeVolume !== null) {
+    elements.playerVolume.value = String(Math.round(nativeVolume));
+    updateSideSliderProgress(elements.playerVolume, nativeVolume);
+    persistPlayerSetting(PLAYER_VOLUME_STORAGE_KEY, Math.round(nativeVolume));
+  }
+
+  return { seconds, duration, nativeVolume };
+}
+
+async function refreshNativePlaybackSnapshot() {
+  try {
+    const playback = await window.BaiaApi.nativeVideoPlayerState();
+    const imported = importNativePlaybackSnapshot(playback);
+    return { playback, ...imported };
+  } catch (error) {
+    console.warn('Snapshot native player non disponibile.', error);
+    return null;
+  }
+}
+
 function clearNativePlaybackMonitor() {
   if (state.nativePlaybackTimer) window.clearInterval(state.nativePlaybackTimer);
   state.nativePlaybackTimer = null;
@@ -1261,9 +1301,11 @@ function clearNativePlaybackMonitor() {
 }
 
 async function saveNativeProgressSnapshot(movieId, seconds, durationSeconds) {
-  if (!Number.isSafeInteger(Number(movieId)) || !Number.isFinite(Number(seconds))) return;
-  const safeSeconds = Math.max(0, Number(seconds));
-  const safeDuration = Number.isFinite(Number(durationSeconds)) ? Math.max(0, Number(durationSeconds)) : 0;
+  const parsedSeconds = nativePlaybackNumber(seconds);
+  const parsedDuration = nativePlaybackNumber(durationSeconds);
+  if (!Number.isSafeInteger(Number(movieId)) || parsedSeconds === null) return;
+  const safeSeconds = Math.max(0, parsedSeconds);
+  const safeDuration = parsedDuration !== null ? Math.max(0, parsedDuration) : 0;
   try {
     const payload = await window.BaiaPage.apiRequest(`/api/movies/${movieId}/progress`, {
       method: 'PUT',
@@ -1296,29 +1338,18 @@ function startNativePlaybackMonitor(movie) {
     polling = true;
     try {
       const playback = await window.BaiaApi.nativeVideoPlayerState();
-      const seconds = Number(playback?.timePos);
-      const duration = Number(playback?.duration);
-      const nativeVolume = Number(playback?.volume);
-      state.nativePlaybackPaused = Boolean(playback?.paused);
-      state.nativePlaybackIdle = Boolean(playback?.idle);
-      state.nativePlaybackSeeking = Boolean(playback?.seeking);
-      state.nativePlaybackBuffering = Boolean(playback?.pausedForCache);
+      const { seconds, duration } = importNativePlaybackSnapshot(playback);
+
       if (playback?.uiCloseRequested && state.nativeUiActive) {
-        // Il compositor ha già completato il teardown nativo prima di
-        // riesporre la WebView: qui chiudiamo soltanto lo stato UI Baia.
+        // Il worker native-first e gia terminato, ma il Core conserva l'ultimo
+        // snapshot valido di time-pos/duration. Importiamolo PRIMA di closePlayer,
+        // cosi il PUT /progress non ricade sullo startSeconds iniziale.
         await closePlayer({ nativeAlreadyClosed: true });
         return;
       }
-      if (Number.isFinite(nativeVolume)) {
-        elements.playerVolume.value = String(Math.round(nativeVolume));
-        updateSideSliderProgress(elements.playerVolume, nativeVolume);
-        persistPlayerSetting(PLAYER_VOLUME_STORAGE_KEY, Math.round(nativeVolume));
-      }
-      if (Number.isFinite(seconds)) state.nativePlaybackLastSeconds = seconds;
-      if (Number.isFinite(duration)) state.nativePlaybackLastDuration = duration;
 
       if (state.nativeUiActive) {
-        state.playerReady = Number.isFinite(duration) && duration > 0;
+        state.playerReady = duration !== null && duration > 0;
         if (!state.scrubbing) updatePlayerTimeline();
         updatePlayPauseControl();
         setPlayerLoading(state.nativePlaybackSeeking || state.nativePlaybackBuffering, { delayed: true });
@@ -1330,7 +1361,7 @@ function startNativePlaybackMonitor(movie) {
       if (playback?.active && !playback?.idle) {
         state.nativePlaybackSeenActive = true;
         const lastSaved = Number(state.nativePlaybackLastSavedSeconds);
-        if (Number.isFinite(seconds) && (!Number.isFinite(lastSaved) || Math.abs(seconds - lastSaved) >= PROGRESS_CHECKPOINT_SECONDS)) {
+        if (seconds !== null && (!Number.isFinite(lastSaved) || Math.abs(seconds - lastSaved) >= PROGRESS_CHECKPOINT_SECONDS)) {
           await saveNativeProgressSnapshot(movie.id, seconds, duration);
         }
         return;
@@ -1366,12 +1397,15 @@ function nativePlayerAccent() {
 function saveProgressOnPageExit() {
   const movie = state.activeMovie;
   if (state.nativeUiActive) {
-    const seconds = Number(state.nativePlaybackLastSeconds);
-    const durationSeconds = Number(state.nativePlaybackLastDuration);
-    if (!movie || !Number.isFinite(seconds)) return;
+    const seconds = nativePlaybackNumber(state.nativePlaybackLastSeconds);
+    const durationSeconds = nativePlaybackNumber(state.nativePlaybackLastDuration);
+    if (!movie || seconds === null) return;
     window.BaiaPage.apiRequest(`/api/movies/${movie.id}/progress`, {
       method: 'PUT',
-      body: JSON.stringify({ seconds: Math.max(0, seconds), durationSeconds: Number.isFinite(durationSeconds) ? Math.max(0, durationSeconds) : 0 }),
+      body: JSON.stringify({
+        seconds: Math.max(0, seconds),
+        durationSeconds: durationSeconds !== null ? Math.max(0, durationSeconds) : 0,
+      }),
       keepalive: true,
     }).catch(() => {});
     return;
@@ -1441,7 +1475,9 @@ async function startPlayback({ restart = false } = {}) {
     meta: movieMeta(movie),
     accent: nativePlayerAccent(),
     startSeconds: !restart && hasResumableProgress(movie) ? Number(movie.progressSeconds) : 0,
-    volume: readPlayerSetting(PLAYER_VOLUME_STORAGE_KEY, 100),
+    // Il native player parte sempre al 100%; le regolazioni successive restano
+    // gestite dal compositor e vengono persistite dal monitor di playback.
+    volume: 100,
   });
   if (nativePlayback.used) {
     resetProgressTracking(movie);
@@ -1593,15 +1629,27 @@ async function closePlayer({ nativeAlreadyClosed = false } = {}) {
 
   if (state.nativeUiActive) {
     const movieId = state.activeMovie?.id;
-    const seconds = Number(state.nativePlaybackLastSeconds);
-    const duration = Number(state.nativePlaybackLastDuration);
-    if (Number.isSafeInteger(Number(movieId)) && Number.isFinite(seconds)) {
-      await saveNativeProgressSnapshot(movieId, seconds, duration);
-    }
+
+    // Non usare il valore iniziale conservato dalla WebView nascosta come
+    // sorgente finale. Prima leggiamo mpv; se dobbiamo arrestarlo esplicitamente,
+    // Rust cattura lo snapshot pre-stop e lo conserva anche durante idle/teardown.
+    await refreshNativePlaybackSnapshot();
     if (!nativeAlreadyClosed) {
-      try { await window.BaiaApi.stopNativeVideoPlayer(); } catch (error) {
+      try {
+        await window.BaiaApi.stopNativeVideoPlayer();
+      } catch (error) {
         console.warn('Arresto native player non riuscito.', error);
       }
+    }
+    // Dopo stop/teardown il Core restituisce lo snapshot terminale cached. Questo
+    // secondo read e intenzionale: impedisce al polling sospeso della WebView di
+    // decidere quale posizione salvare.
+    await refreshNativePlaybackSnapshot();
+
+    const seconds = nativePlaybackNumber(state.nativePlaybackLastSeconds);
+    const duration = nativePlaybackNumber(state.nativePlaybackLastDuration);
+    if (Number.isSafeInteger(Number(movieId)) && seconds !== null) {
+      await saveNativeProgressSnapshot(movieId, seconds, duration);
     }
     clearNativePlaybackMonitor();
     state.nativeUiActive = false;
@@ -1891,8 +1939,11 @@ document.addEventListener('visibilitychange', () => {
       : (Number.isFinite(elements.videoPlayer.currentTime) ? elements.videoPlayer.currentTime : null);
     requestPlayerWakeLock();
   } else {
-    if (state.nativeUiActive) saveProgressOnPageExit();
-    else saveProgress(true);
+    // Nascondere la WebView e parte normale del playback nativo. Non persistere
+    // qui nativePlaybackLastSeconds: in questo momento puo essere ancora lo
+    // startSeconds della sessione. Il salvataggio nativo viene preso dallo
+    // snapshot Rust al checkpoint/close, non dal visibilitychange.
+    if (!state.nativeUiActive) saveProgress(true);
     releasePlayerWakeLock();
   }
 });

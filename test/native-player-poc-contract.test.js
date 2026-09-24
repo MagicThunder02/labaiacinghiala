@@ -110,6 +110,185 @@ test('transizione native-first non espone il player WebView e usa maschere AA da
   assert.match(nativePlayer, /smooth_circle\(&self\.ui_textures, seek_x, seek_y, 16\.0, accent\)/);
 });
 
+test('Phase 6B.4 porta l intro WebView nel compositor e usa il frame finale come pre-roll', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+  const shell = read('public/js/app-shell.js');
+
+  assert.match(nativePlayer, /PLAYBACK_INTRO_ANIMATION_DURATION: Duration = Duration::from_secs\(9\)/);
+  assert.match(nativePlayer, /PLAYBACK_INTRO_AUDIO_LEAD: Duration = Duration::from_millis\(250\)/);
+  assert.match(nativePlayer, /PLAYBACK_INTRO_MIN_VISIBLE_DURATION: Duration = Duration::from_millis\(9250\)/);
+  assert.match(nativePlayer, /intro_visible: bool/);
+  assert.match(nativePlayer, /draw_playback_intro/);
+  assert.match(nativePlayer, /intro-boar-open-1024\.alpha/);
+  assert.match(nativePlayer, /intro-boar-wink-1024\.alpha/);
+  assert.match(nativePlayer, /intro-eyepatch-1024\.rgba/);
+  assert.match(nativePlayer, /intro-wordmark-2048x787\.rgba/);
+  assert.match(nativePlayer, /intro-ring-1024\.alpha/);
+  assert.match(nativePlayer, /intro-radial-256\.alpha/);
+  assert.match(nativePlayer, /playback_intro_renderer=textured_svg source=webview_app_intro filter=linear antialias=alpha_rgba/);
+
+  // Il load parte subito in pausa; al frame finale mpv fa un breve pre-roll mutato
+  // e l'overlay viene rimosso solo dopo PLAYBACK_RESTART (o il failsafe).
+  assert.match(nativePlayer, /api\.set_property\(handle, "pause", "yes"\)\?;[\s\S]{0,160}api\.command\(handle, &command\)\?;/);
+  assert.match(nativePlayer, /api\.set_property\(handle, "mute", "yes"\)\?;/);
+  assert.match(nativePlayer, /MPV_EVENT_PLAYBACK_RESTART: i32 = 21/);
+  assert.match(nativePlayer, /elapsed >= PLAYBACK_INTRO_MIN_VISIBLE_DURATION[\s\S]{0,280}api\.set_property\(handle, "pause", "no"\)/);
+  assert.match(nativePlayer, /playback_restart_seen/);
+  assert.match(nativePlayer, /elapsed >= PLAYBACK_INTRO_MIN_VISIBLE_DURATION/);
+  assert.match(nativePlayer, /api\.set_property\(handle, "mute", "no"\)/);
+  assert.match(nativePlayer, /ui\.intro_visible = false/);
+
+  // Il soundtrack parte subito; la timeline visiva resta sul primo frame per
+  // 250ms e poi esegue gli stessi 9s di keyframe WebView.
+  assert.match(nativePlayer, /intro_visual_started = intro_started \+ PLAYBACK_INTRO_AUDIO_LEAD/);
+  assert.match(nativePlayer, /ui\.intro_started_at = Some\(intro_visual_started\)/);
+  assert.match(shell, /PLAYBACK_INTRO_DURATION_MS = 9000/);
+  assert.doesNotMatch(shell, /PLAYBACK_INTRO_AUDIO_DELAY_MS/);
+  assert.doesNotMatch(shell, /playbackIntroAudioDelayTimer = window\.setTimeout/);
+  assert.match(shell, /playbackIntroAudio: startPlaybackIntroAudioOnly/);
+  assert.match(shell, /stopPlaybackIntroAudio: stopPlaybackIntroAudioOnly/);
+  assert.match(nativePlayer, /window\.BaiaShell\?\.playbackIntroAudio\?\.\(\)/);
+  assert.match(nativePlayer, /window\.BaiaShell\?\.stopPlaybackIntroAudio\?\.\(\)/);
+
+  for (const [asset, size] of [
+    ['intro-boar-open-1024.alpha', 1024 * 1024],
+    ['intro-boar-wink-1024.alpha', 1024 * 1024],
+    ['intro-eyepatch-1024.rgba', 1024 * 1024 * 4],
+    ['intro-wordmark-2048x787.rgba', 2048 * 787 * 4],
+    ['intro-ring-1024.alpha', 1024 * 1024],
+    ['intro-radial-256.alpha', 256 * 256],
+  ]) {
+    assert.equal(fs.statSync(path.join(ROOT, 'src-tauri/src/native_player_assets', asset)).size, size);
+  }
+});
+
+test('Phase 6B.4.4 ripristina auto-hide e toggle dei controlli in fullscreen', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+
+  assert.match(nativePlayer, /FULLSCREEN_CONTROLS_HIDE_DELAY: Duration = Duration::from_secs\(3\)/);
+  assert.match(nativePlayer, /controls_visible: bool/);
+  assert.match(nativePlayer, /controls_hide_at: Option<Instant>/);
+  assert.match(nativePlayer, /fn auto_hide_controls_if_due\(&mut self, now: Instant\) -> bool/);
+  assert.match(nativePlayer, /self\.fullscreen && !self\.paused && !self\.intro_visible/);
+  assert.match(nativePlayer, /shared\.auto_hide_controls_if_due\(now\)/);
+  assert.match(nativePlayer, /if !state\.controls_visible \{[\s\S]{0,180}ui\.show_controls\(now\)[\s\S]{0,80}return;/);
+  assert.match(nativePlayer, /if state\.fullscreen \{\s*self\.shared\.update\(\|ui\| ui\.hide_controls\(\)\);\s*\}/);
+  assert.match(nativePlayer, /fn mouse_move[\s\S]{0,1600}ui\.show_controls\(now\)/);
+  assert.match(nativePlayer, /if !state\.controls_visible \{\s*unsafe \{ glDisable\(GL_BLEND\); \}\s*return;\s*\}/);
+  assert.match(nativePlayer, /ui\.show_controls\(controls_now\)/);
+});
+
+test('Phase 6B.4.5 evita riapertura sintetica dei controlli e protegge lo snapshot progresso', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+  const films = read('public/js/films.js');
+
+  assert.match(nativePlayer, /POINTER_MOVE_WAKE_THRESHOLD: f32 = 2\.0/);
+  assert.match(nativePlayer, /last_pointer: Mutex<Option<\(f32, f32\)>>/);
+  assert.match(nativePlayer, /let _ = self\.remember_pointer\(x, y\);/);
+  assert.match(nativePlayer, /DragMode::None => \{[\s\S]{0,500}if self\.remember_pointer\(x, y\)/);
+
+  assert.match(nativePlayer, /let terminal_idle = state\.idle/);
+  assert.match(nativePlayer, /if terminal_idle \|\| state\.time_pos\.is_none\(\)/);
+  assert.match(nativePlayer, /progress_snapshot=teardown/);
+
+  assert.match(films, /function nativePlaybackNumber\(value\)/);
+  assert.match(films, /if \(value === null \|\| value === undefined \|\| value === ''\) return null/);
+  assert.match(films, /async function refreshNativePlaybackSnapshot\(\)/);
+  assert.match(films, /await refreshNativePlaybackSnapshot\(\);[\s\S]{0,500}stopNativeVideoPlayer[\s\S]{0,500}await refreshNativePlaybackSnapshot\(\)/);
+  assert.match(films, /if \(!state\.nativeUiActive\) saveProgress\(true\)/);
+  assert.doesNotMatch(films, /if \(state\.nativeUiActive\) saveProgressOnPageExit\(\)/);
+});
+
+test('rifiniture native player: Indietro glass, tempi visibili, volume 100 e niente fascia fumé', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+  const films = read('public/js/films.js');
+
+  assert.match(nativePlayer, /back-pill-208x84\.alpha/);
+  assert.match(nativePlayer, /text-indietro-100x32\.alpha/);
+  assert.match(nativePlayer, /time-glyphs-312x40\.alpha/);
+  assert.match(nativePlayer, /let back_width = 104\.0/);
+  assert.match(nativePlayer, /self\.ui_textures\.back_button_pill/);
+  assert.match(nativePlayer, /self\.ui_textures\.text_indietro/);
+  assert.match(nativePlayer, /draw_player_time\(/);
+  assert.match(nativePlayer, /format!\("-\{\}", time_string\(remaining\)\)/);
+  assert.match(nativePlayer, /NATIVE_PLAYBACK_START_VOLUME: f64 = 100\.0/);
+  assert.match(films, /volume: 100,/);
+  assert.doesNotMatch(nativePlayer, /quad\(0\.0, height - 156\.0, width, height/);
+
+  assert.equal(
+    fs.statSync(path.join(ROOT, 'src-tauri/src/native_player_assets', 'back-pill-208x84.alpha')).size,
+    208 * 84,
+  );
+  assert.equal(
+    fs.statSync(path.join(ROOT, 'src-tauri/src/native_player_assets', 'text-indietro-100x32.alpha')).size,
+    100 * 32,
+  );
+  assert.equal(
+    fs.statSync(path.join(ROOT, 'src-tauri/src/native_player_assets', 'time-glyphs-312x40.alpha')).size,
+    312 * 40,
+  );
+});
+
+test('progresso native sopravvive al teardown e viene salvato prima di chiudere lo stato UI', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+  const films = read('public/js/films.js');
+
+  assert.match(nativePlayer, /last_playback_state: Arc<Mutex<NativePlaybackState>>/);
+  assert.match(nativePlayer, /fn capture_playback_state\(/);
+  assert.match(nativePlayer, /SurfaceAction::RequestClose[\s\S]{0,900}progress_snapshot=close_cached/);
+  assert.match(nativePlayer, /fn cached_playback_state\(&self\)/);
+  assert.match(nativePlayer, /return self\.cached_playback_state\(\)/);
+  assert.match(nativePlayer, /progress_snapshot=close_cached/);
+
+  const monitor = films.match(/function startNativePlaybackMonitor\(movie\) \{[\s\S]*?\n\}/)?.[0] || '';
+  const snapshotImport = monitor.indexOf('importNativePlaybackSnapshot(playback)');
+  const closeRequested = monitor.indexOf('if (playback?.uiCloseRequested && state.nativeUiActive)');
+  assert.ok(snapshotImport >= 0, 'il monitor deve importare timePos dallo snapshot nativo');
+  assert.ok(closeRequested > snapshotImport, 'timePos/duration vanno importati prima del closePlayer');
+  assert.match(monitor, /await closePlayer\(\{ nativeAlreadyClosed: true \}\)/);
+
+  const closePlayer = films.match(/async function closePlayer\([\s\S]*?\n\}/)?.[0] || '';
+  assert.match(closePlayer, /await saveNativeProgressSnapshot\(movieId, seconds, duration\)/);
+});
+
+
+test('Phase 6B.5 riduce contention e latenza tra WebView, worker mpv e compositor', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+
+  assert.match(nativePlayer, /EVENT_POLL_INTERVAL: Duration = Duration::from_millis\(8\)/);
+  assert.match(nativePlayer, /DIAGNOSTIC_STATE_REFRESH_INTERVAL: Duration = Duration::from_secs\(1\)/);
+  assert.match(nativePlayer, /VOLUME_ACTION_INTERVAL: Duration = Duration::from_millis\(16\)/);
+
+  // Il polling frontend legge uno snapshot Rust gia pronto: non deve piu
+  // accodare GetState al worker libmpv quattro volte al secondo.
+  assert.doesNotMatch(nativePlayer, /PlayerCommand::GetState/);
+  assert.match(nativePlayer, /fn playback_state\(&self\)[\s\S]{0,1200}last_playback_state/);
+  assert.match(nativePlayer, /Il worker aggiorna questo snapshot ogni 100ms/);
+
+  // Le letture costose di cache/codec/source sono separate dal refresh UI rapido.
+  assert.match(nativePlayer, /fn refresh_playback_diagnostics\(/);
+  assert.match(nativePlayer, /fn update_render_state_from_snapshot\(/);
+  assert.match(nativePlayer, /latency=slow operation=fast_state_refresh/);
+  assert.match(nativePlayer, /latency=slow operation=mpv_terminate_destroy/);
+
+  // Il drag volume non deve saturare la coda e il close spegne subito il surface.
+  assert.match(nativePlayer, /fn volume_at\(&self, y: f32, height: f32, commit: bool\)/);
+  assert.match(nativePlayer, /commit \|\| last\.map_or/);
+  assert.match(nativePlayer, /fn request_close\(&self\)[\s\S]{0,500}shutdown\.store\(true, Ordering::Release\)[\s\S]{0,250}SurfaceAction::RequestClose/);
+
+  // Le invoke che possono attendere il worker non girano come command sincrone.
+  for (const command of [
+    'baia_core_native_player_play',
+    'baia_core_native_player_pause',
+    'baia_core_native_player_seek',
+    'baia_core_native_player_set_volume',
+    'baia_core_native_player_get_state',
+    'baia_core_native_player_stop',
+  ]) {
+    assert.match(nativePlayer, new RegExp(`pub async fn ${command}\\(`));
+  }
+});
+
 test('controlli Phase 6B appartengono al compositor Baia e non all OSC mpv', () => {
   const nativePlayer = read('src-tauri/src/native_player.rs');
   const films = read('public/js/films.js');
@@ -209,4 +388,43 @@ test('Tauri mantiene Media Bridge legacy soltanto come fallback', () => {
   assert.match(lib, /native_player::baia_core_native_player_get_state/);
   assert.match(lib, /native_player::baia_core_native_player_stop/);
   assert.match(lib, /media_bridge::baia_core_media_bridge_url/);
+});
+
+test('Phase 6B.6 strumenta transport/chunk senza cambiare i default Phase 4/NativeMediaSource', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+  const nativeSource = read('src-tauri/src/native_media_source.rs');
+  const analyzer = read('scripts/analyze-native-player-transport.js');
+  const packageJson = read('package.json');
+  const benchmark = read('NATIVE-PLAYER-TRANSPORT-BENCHMARK.md');
+
+  for (const field of [
+    'metadata_elapsed_ms',
+    'blocking_fetch_ms_total',
+    'blocking_fetch_ms_max',
+    'range_headers_ms_total',
+    'range_body_ms_total',
+    'range_elapsed_ms_total',
+    'first_range_elapsed_ms',
+    'slow_ranges_250ms',
+    'seek_distance_bytes_max',
+  ]) assert.match(nativeSource, new RegExp(field));
+
+  assert.match(nativeSource, /let blocked_started = Instant::now\(\);[\s\S]{0,180}self\.fetch_range\(\)\?/);
+  assert.match(nativeSource, /throughput_mib_s=\{:\.2\}/);
+  assert.match(nativePlayer, /native_player transport_sample/);
+  assert.match(nativePlayer, /native_player transport_summary/);
+  assert.match(nativePlayer, /transport_event=cache_pause_start/);
+  assert.match(nativePlayer, /open_to_file_loaded_ms/);
+  assert.match(nativePlayer, /open_to_reveal_ms/);
+
+  // I default di trasporto restano quelli gia validati prima della campagna benchmark.
+  assert.match(nativeSource, /DEFAULT_MAX_RANGE_BYTES: usize = 4 \* 1024 \* 1024/);
+  assert.match(nativeSource, /DEFAULT_WINDOW_BYTES: usize = 16 \* 1024 \* 1024/);
+  assert.match(nativePlayer, /api\.set_option\(handle, "cache-secs", "45"\)/);
+  assert.match(nativePlayer, /api\.set_option\(handle, "stream-buffer-size", "2MiB"\)/);
+
+  assert.match(analyzer, /transport_summary/);
+  assert.match(analyzer, /maxBlockingFetchMs/);
+  assert.match(packageJson, /analyze:native-player-transport/);
+  assert.match(benchmark, /prefetch asincrono\/doppio buffer/);
 });
