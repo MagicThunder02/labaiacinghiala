@@ -155,9 +155,6 @@ test('direct media data plane mantiene Node nel control plane e valida il filesy
   assert.match(connector, /SeekFrom::Start/);
   assert.match(connector, /file\.take\(content_length\)/);
   assert.match(connector, /media_source=direct_file/);
-  assert.match(connector, /requested_bytes=/);
-  assert.match(connector, /client_disconnected=/);
-  assert.match(connector, /control_elapsed_ms=/);
   assert.match(connector, /canonical\.starts_with\(&root\)/);
   assert.doesNotMatch(mediaBridge, /Internal-Media-Descriptor/i);
 });

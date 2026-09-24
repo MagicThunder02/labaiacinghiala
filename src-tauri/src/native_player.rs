@@ -1,10 +1,4 @@
-use crate::{
-    core::CoreState,
-    native_media_source::{
-        self, MpvStreamOpenFn, NativeMediaSourceRegistry,
-        NativeMediaSourceStats, NativeMediaSourceTemplate,
-    },
-};
+use crate::{core::CoreState, media_bridge::MediaBridge};
 use libloading::Library;
 use serde::Serialize;
 use std::{
@@ -23,7 +17,7 @@ use tauri::{AppHandle, Manager, State};
 
 const NATIVE_VIDEO_PLAYER_ENV: &str = "BAIA_NATIVE_VIDEO_PLAYER";
 const LIBMPV_DLL_ENV: &str = "BAIA_LIBMPV_DLL";
-const BACKEND_NAME: &str = "libmpv-baia-native-source";
+const BACKEND_NAME: &str = "libmpv-embedded-wid";
 const NATIVE_PLAYER_WINDOW_LABEL: &str = "baia-native-video";
 const WORKER_START_TIMEOUT: Duration = Duration::from_secs(8);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
@@ -38,12 +32,6 @@ type MpvCommand = unsafe extern "C" fn(*mut c_void, *const *const c_char) -> i32
 type MpvFree = unsafe extern "C" fn(*mut c_void);
 type MpvErrorString = unsafe extern "C" fn(i32) -> *const c_char;
 type MpvClientApiVersion = unsafe extern "C" fn() -> u64;
-type MpvStreamCbAddRo = unsafe extern "C" fn(
-    *mut c_void,
-    *const c_char,
-    *mut c_void,
-    MpvStreamOpenFn,
-) -> i32;
 
 struct MpvApi {
     _library: Library,
@@ -57,7 +45,6 @@ struct MpvApi {
     free: MpvFree,
     error_string: MpvErrorString,
     client_api_version: MpvClientApiVersion,
-    stream_cb_add_ro: MpvStreamCbAddRo,
 }
 
 impl MpvApi {
@@ -85,7 +72,6 @@ impl MpvApi {
                 free: symbol(&library, b"mpv_free\0")?,
                 error_string: symbol(&library, b"mpv_error_string\0")?,
                 client_api_version: symbol(&library, b"mpv_client_api_version\0")?,
-                stream_cb_add_ro: symbol(&library, b"mpv_stream_cb_add_ro\0")?,
                 _library: library,
             })
         }
@@ -163,13 +149,9 @@ pub struct NativePlaybackState {
     duration: Option<f64>,
     cache_duration: Option<f64>,
     cache_buffering_state: Option<f64>,
-    cache_speed: Option<f64>,
-    demuxer_cache_idle: bool,
-    demuxer_cache_state: Option<String>,
     hwdec_current: Option<String>,
     video_codec: Option<String>,
     audio_codec: Option<String>,
-    source: Option<NativeMediaSourceStats>,
 }
 
 impl NativePlaybackState {
@@ -193,20 +175,16 @@ impl NativePlaybackState {
             duration: number_property("duration"),
             cache_duration: number_property("demuxer-cache-duration"),
             cache_buffering_state: number_property("cache-buffering-state"),
-            cache_speed: number_property("cache-speed"),
-            demuxer_cache_idle: bool_property("demuxer-cache-idle"),
-            demuxer_cache_state: api.get_property(handle, "demuxer-cache-state"),
             hwdec_current: api.get_property(handle, "hwdec-current").filter(|value| !value.is_empty() && value != "no"),
             video_codec: api.get_property(handle, "video-codec"),
             audio_codec: api.get_property(handle, "audio-codec"),
-            source: None,
         }
     }
 }
 
 enum PlayerCommand {
     Open {
-        source: NativeMediaSourceTemplate,
+        url: String,
         response: Sender<Result<(), String>>,
     },
     SetPaused {
@@ -367,12 +345,12 @@ impl NativePlayerState {
             .map_err(|_| "Timeout comando libmpv.".to_string())?
     }
 
-    fn open(&self, source: NativeMediaSourceTemplate, hwnd: usize) -> Result<(), String> {
+    fn open(&self, url: String, hwnd: usize) -> Result<(), String> {
         let sender = self.ensure_runtime(hwnd)?;
         let (response_sender, response_receiver) = mpsc::channel();
         sender
             .send(PlayerCommand::Open {
-                source,
+                url,
                 response: response_sender,
             })
             .map_err(|_| "Thread libmpv terminato inaspettatamente.".to_string())?;
@@ -480,12 +458,9 @@ fn player_worker(
         return;
     }
 
-    let registry = Box::new(NativeMediaSourceRegistry::new());
-    let registry_ptr = (&*registry as *const NativeMediaSourceRegistry) as *mut c_void;
-
     let configure = (|| -> Result<(), String> {
         // Il JS non può fornire opzioni mpv. Il profilo iniziale resta piccolo e
-        // misurabile: libmpv gestisce cache/demux/seek, mentre baia:// fornisce Range bounded dal Core Rust.
+        // misurabile: cache/demux/seek rimangono responsabilità del motore nativo.
         api.set_option(handle, "config", "no")?;
         api.set_option(handle, "terminal", "no")?;
         api.set_option(handle, "input-default-bindings", "yes")?;
@@ -494,35 +469,11 @@ fn player_worker(
         // mpv su win32 documenta wid come HWND convertito a uint32_t.
         let wid = native_window_handle as u32;
         api.set_option(handle, "wid", &wid.to_string())?;
-        // Profilo rete Baia: mpv resta responsabile della cache temporale e
-        // del demux read-ahead. NativeMediaSource si limita ad aggregare i
-        // piccoli read in Range bounded e a mantenere stabile il trasporto.
         api.set_option(handle, "cache", "yes")?;
-        api.set_option(handle, "cache-secs", "45")?;
-        api.set_option(handle, "cache-pause", "yes")?;
-        api.set_option(handle, "cache-pause-initial", "yes")?;
-        api.set_option(handle, "cache-pause-wait", "5")?;
-        api.set_option(handle, "demuxer-max-bytes", "64MiB")?;
-        api.set_option(handle, "demuxer-max-back-bytes", "32MiB")?;
         api.set_option(handle, "demuxer-seekable-cache", "yes")?;
-        api.set_option(handle, "demuxer-hysteresis-secs", "15")?;
-        api.set_option(handle, "stream-buffer-size", "2MiB")?;
-        // Il default mpv è molto breve; 5s evita chiusure forzate del custom
-        // stream mentre un Range bounded sta terminando.
-        api.set_option(handle, "demuxer-termination-timeout", "5")?;
         api.set_option(handle, "hwdec", "auto")?;
         let code = unsafe { (api.initialize)(handle) };
         api.check(code, "Impossibile inizializzare libmpv")?;
-        let protocol = native_media_source::protocol_name();
-        let code = unsafe {
-            (api.stream_cb_add_ro)(
-                handle,
-                protocol.as_ptr().cast::<c_char>(),
-                registry_ptr,
-                native_media_source::stream_open_callback,
-            )
-        };
-        api.check(code, "Impossibile registrare il protocollo baia:// in libmpv")?;
         Ok(())
     })();
 
@@ -536,13 +487,11 @@ fn player_worker(
 
     while let Ok(command) = receiver.recv() {
         match command {
-            PlayerCommand::Open { source, response } => {
-                let result = registry.register(source).and_then(|url| {
-                    api.command(
-                        handle,
-                        &["loadfile".to_string(), url, "replace".to_string()],
-                    )
-                });
+            PlayerCommand::Open { url, response } => {
+                let result = api.command(
+                    handle,
+                    &["loadfile".to_string(), url, "replace".to_string()],
+                );
                 let _ = response.send(result);
             }
             PlayerCommand::SetPaused { paused, response } => {
@@ -579,9 +528,7 @@ fn player_worker(
                 let _ = response.send(result);
             }
             PlayerCommand::GetState { response } => {
-                let mut state = NativePlaybackState::from_mpv(&api, handle);
-                state.source = registry.current_stats();
-                let _ = response.send(Ok(state));
+                let _ = response.send(Ok(NativePlaybackState::from_mpv(&api, handle)));
             }
             PlayerCommand::Shutdown => break,
         }
@@ -663,6 +610,7 @@ pub async fn baia_core_native_player_open(
     movie_id: u64,
     app: AppHandle,
     core_state: State<'_, CoreState>,
+    bridge: State<'_, MediaBridge>,
     player: State<'_, NativePlayerState>,
 ) -> Result<NativePlayerLaunch, String> {
     if !native_player_enabled() {
@@ -675,10 +623,9 @@ pub async fn baia_core_native_player_open(
     }
     player.probe()?;
 
-    // Il frontend passa soltanto l'identificatore logico. Il Core crea una
-    // NativeMediaSource autorizzata che parla direttamente con il Connector:
-    // nessun URL localhost e nessun Media Bridge V6 nel data path video.
-    let media_source = NativeMediaSourceTemplate::for_movie(movie_id, &core_state)?;
+    // Il frontend continua a passare soltanto l'identificatore logico. URL locale,
+    // grant, chiave device e pin TLS restano nel Core Rust/Media Bridge.
+    let media_url = bridge.register_movie_stream(movie_id, &core_state)?;
 
     let window = if let Some(window) = app.get_window(NATIVE_PLAYER_WINDOW_LABEL) {
         window
@@ -716,7 +663,7 @@ pub async fn baia_core_native_player_open(
         return Err("Finestra video nativa non disponibile su questa piattaforma.".to_string());
     }
 
-    player.open(media_source, hwnd)?;
+    player.open(media_url, hwnd)?;
     window
         .show()
         .map_err(|error| format!("Impossibile mostrare il player nativo: {error}"))?;
@@ -780,7 +727,7 @@ mod tests {
 
     #[test]
     fn embedded_backend_is_explicitly_libmpv() {
-        assert_eq!(BACKEND_NAME, "libmpv-baia-native-source");
+        assert_eq!(BACKEND_NAME, "libmpv-embedded-wid");
     }
 
     #[test]

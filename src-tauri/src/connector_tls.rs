@@ -273,35 +273,6 @@ pub fn blocking_client(
         .map_err(|error| format!("Impossibile inizializzare il client TLS pinnato del Core: {error}"))
 }
 
-/// Client dedicato ai Range video nativi. Ogni istanza mantiene al massimo
-/// una connessione idle verso il Connector; NativeMediaSource crea due istanze
-/// indipendenti per ottenere un pool deterministico massimo di due TLS.
-///
-/// L'idle timeout viene disabilitato perché il server Connector applica già il
-/// proprio limite keep-alive. TCP keepalive protegge le sessioni durante pause
-/// o periodi in cui la cache mpv è piena.
-pub fn blocking_media_client(
-    server_fingerprint: &str,
-    connect_timeout: Duration,
-    request_timeout: Option<Duration>,
-) -> Result<reqwest::blocking::Client, String> {
-    let mut builder = reqwest::blocking::Client::builder()
-        .no_proxy()
-        .redirect(Policy::none())
-        .connect_timeout(connect_timeout)
-        .pool_max_idle_per_host(1)
-        .pool_idle_timeout(None::<Duration>)
-        .tcp_keepalive(Some(Duration::from_secs(20)))
-        .https_only(true)
-        .tls_backend_preconfigured(client_config(server_fingerprint)?);
-    if let Some(timeout) = request_timeout {
-        builder = builder.timeout(timeout);
-    }
-    builder
-        .build()
-        .map_err(|error| format!("Impossibile inizializzare il client media TLS pinnato del Core: {error}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
