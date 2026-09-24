@@ -10,6 +10,8 @@ use serde::Serialize;
 use std::{
     env,
     ffi::{c_char, c_void, CStr, CString},
+    fs::OpenOptions,
+    io::Write,
     path::{Path, PathBuf},
     ptr,
     sync::{
@@ -17,7 +19,7 @@ use std::{
         Mutex,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Manager, State};
 
@@ -30,6 +32,53 @@ const UI_NAME: &str = "baia-native-osc";
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(40);
 const WORKER_START_TIMEOUT: Duration = Duration::from_secs(8);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
+const DIAGNOSTIC_LOG_NAME: &str = "native-player-diagnostic.log";
+
+fn diagnostic_log_path() -> PathBuf {
+    if let Ok(executable) = env::current_exe() {
+        if let Some(parent) = executable.parent() {
+            return parent.join(DIAGNOSTIC_LOG_NAME);
+        }
+    }
+    env::temp_dir().join(DIAGNOSTIC_LOG_NAME)
+}
+
+fn diagnostic_timestamp() -> String {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(value) => format!("{}.{:03}", value.as_secs(), value.subsec_millis()),
+        Err(_) => "0.000".to_string(),
+    }
+}
+
+fn diagnostic_log(message: impl AsRef<str>) {
+    let line = format!("[{}] {}\n", diagnostic_timestamp(), message.as_ref());
+    eprint!("{line}");
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(diagnostic_log_path())
+    {
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+fn diagnostic_session_start(resource_dir: &Path) {
+    let path = diagnostic_log_path();
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)
+    {
+        let _ = writeln!(
+            file,
+            "[{}] native_player diagnostic_session=start resource_dir={} log_path={}",
+            diagnostic_timestamp(),
+            resource_dir.display(),
+            path.display()
+        );
+    }
+}
 
 type MpvCreate = unsafe extern "C" fn() -> *mut c_void;
 type MpvInitialize = unsafe extern "C" fn(*mut c_void) -> i32;
@@ -134,17 +183,17 @@ impl MpvApi {
     }
 
     fn set_option(&self, handle: *mut c_void, name: &str, value: &str) -> Result<(), String> {
-        let name = CString::new(name).map_err(|_| "Nome opzione libmpv non valido.".to_string())?;
-        let value = CString::new(value).map_err(|_| "Valore opzione libmpv non valido.".to_string())?;
-        let code = unsafe { (self.set_option_string)(handle, name.as_ptr(), value.as_ptr()) };
-        self.check(code, "Impossibile configurare libmpv")
+        let name_c = CString::new(name).map_err(|_| "Nome opzione libmpv non valido.".to_string())?;
+        let value_c = CString::new(value).map_err(|_| "Valore opzione libmpv non valido.".to_string())?;
+        let code = unsafe { (self.set_option_string)(handle, name_c.as_ptr(), value_c.as_ptr()) };
+        self.check(code, &format!("Impossibile configurare libmpv option={name}"))
     }
 
     fn set_property(&self, handle: *mut c_void, name: &str, value: &str) -> Result<(), String> {
-        let name = CString::new(name).map_err(|_| "Nome proprietà libmpv non valido.".to_string())?;
-        let value = CString::new(value).map_err(|_| "Valore proprietà libmpv non valido.".to_string())?;
-        let code = unsafe { (self.set_property_string)(handle, name.as_ptr(), value.as_ptr()) };
-        self.check(code, "Impossibile aggiornare libmpv")
+        let name_c = CString::new(name).map_err(|_| "Nome proprietà libmpv non valido.".to_string())?;
+        let value_c = CString::new(value).map_err(|_| "Valore proprietà libmpv non valido.".to_string())?;
+        let code = unsafe { (self.set_property_string)(handle, name_c.as_ptr(), value_c.as_ptr()) };
+        self.check(code, &format!("Impossibile aggiornare libmpv property={name}"))
     }
 
     fn get_property(&self, handle: *mut c_void, name: &str) -> Option<String> {
@@ -166,7 +215,8 @@ impl MpvApi {
         let mut pointers = c_values.iter().map(|value| value.as_ptr()).collect::<Vec<_>>();
         pointers.push(ptr::null());
         let code = unsafe { (self.command)(handle, pointers.as_ptr()) };
-        self.check(code, "Comando libmpv fallito")
+        let command_name = values.first().map(String::as_str).unwrap_or("<empty>");
+        self.check(code, &format!("Comando libmpv fallito command={command_name}"))
     }
 }
 
@@ -315,20 +365,60 @@ impl NativePlayerState {
     }
 
     fn probe(&self) -> Result<String, String> {
+        diagnostic_log("native_player probe=start");
         if !cfg!(target_os = "windows") {
-            return Err("La prima integrazione libmpv embedded è abilitata solo sul client Windows.".to_string());
+            let error = "La prima integrazione libmpv embedded è abilitata solo sul client Windows.".to_string();
+            diagnostic_log(format!("native_player probe=error error={error}"));
+            return Err(error);
         }
-        let path = self.dll_path().ok_or_else(|| {
-            format!(
-                "libmpv-2.dll non trovata. Esegui scripts/prepare-libmpv-windows.ps1 prima della build oppure configura {LIBMPV_DLL_ENV}."
-            )
-        })?;
+
+        let candidates = self.dll_candidates();
+        for candidate in &candidates {
+            diagnostic_log(format!(
+                "native_player probe=dll_candidate exists={} path={}",
+                candidate.is_file(),
+                candidate.display()
+            ));
+        }
+        let path = match candidates.into_iter().find(|candidate| candidate.is_file()) {
+            Some(path) => path,
+            None => {
+                let error = format!(
+                    "libmpv-2.dll non trovata. Esegui scripts/prepare-libmpv-windows.ps1 prima della build oppure configura {LIBMPV_DLL_ENV}."
+                );
+                diagnostic_log(format!("native_player probe=error stage=dll_lookup error={error}"));
+                return Err(error);
+            }
+        };
+
         let osc_path = self.osc_path();
+        diagnostic_log(format!(
+            "native_player probe=osc exists={} path={}",
+            osc_path.is_file(),
+            osc_path.display()
+        ));
         if !osc_path.is_file() {
-            return Err(format!("OSC nativo Baia non trovato: {}", osc_path.display()));
+            let error = format!("OSC nativo Baia non trovato: {}", osc_path.display());
+            diagnostic_log(format!("native_player probe=error stage=osc_lookup error={error}"));
+            return Err(error);
         }
-        let api = MpvApi::load(&path)?;
-        Ok(api.version_string())
+
+        let api = match MpvApi::load(&path) {
+            Ok(api) => api,
+            Err(error) => {
+                diagnostic_log(format!(
+                    "native_player probe=error stage=load_dll path={} error={error}",
+                    path.display()
+                ));
+                return Err(error);
+            }
+        };
+        let version = api.version_string();
+        diagnostic_log(format!(
+            "native_player probe=ok dll={} version={version}",
+            path.display()
+        ));
+        Ok(version)
     }
 
     fn ensure_runtime(
@@ -337,6 +427,10 @@ impl NativePlayerState {
         parent_window_handle: usize,
         initial_fullscreen: bool,
     ) -> Result<Sender<PlayerCommand>, String> {
+        diagnostic_log(format!(
+            "native_player runtime=ensure_start hwnd={} initial_fullscreen={}",
+            parent_window_handle, initial_fullscreen
+        ));
         let path = self.dll_path().ok_or_else(|| {
             format!(
                 "libmpv-2.dll non trovata. Esegui scripts/prepare-libmpv-windows.ps1 prima della build oppure configura {LIBMPV_DLL_ENV}."
@@ -344,10 +438,12 @@ impl NativePlayerState {
         })?;
         let osc_path = self.osc_path();
         if !osc_path.is_file() {
-            return Err(format!(
+            let error = format!(
                 "OSC nativo Baia non trovato: {}",
                 osc_path.display()
-            ));
+            );
+            diagnostic_log(format!("native_player runtime=error stage=osc_lookup error={error}"));
+            return Err(error);
         }
 
         let mut runtime = self
@@ -356,14 +452,21 @@ impl NativePlayerState {
             .map_err(|_| "Stato libmpv non disponibile.".to_string())?;
 
         if runtime.as_ref().is_some_and(|existing| existing.worker.is_finished()) {
+            diagnostic_log("native_player runtime=previous_worker_finished");
             if let Some(existing) = runtime.take() {
                 let _ = existing.worker.join();
             }
         }
         if let Some(existing) = runtime.as_ref() {
+            diagnostic_log("native_player runtime=reuse_existing_worker");
             return Ok(existing.sender.clone());
         }
 
+        diagnostic_log(format!(
+            "native_player runtime=spawn_worker dll={} osc={}",
+            path.display(),
+            osc_path.display()
+        ));
         let (sender, receiver) = mpsc::channel();
         let (ready_sender, ready_receiver) = mpsc::channel();
         let worker = thread::Builder::new()
@@ -379,10 +482,15 @@ impl NativePlayerState {
                     ready_sender,
                 )
             })
-            .map_err(|error| format!("Impossibile avviare il thread libmpv: {error}"))?;
+            .map_err(|error| {
+                let message = format!("Impossibile avviare il thread libmpv: {error}");
+                diagnostic_log(format!("native_player runtime=error stage=spawn_worker error={message}"));
+                message
+            })?;
 
         match ready_receiver.recv_timeout(WORKER_START_TIMEOUT) {
-            Ok(Ok(_version)) => {
+            Ok(Ok(version)) => {
+                diagnostic_log(format!("native_player runtime=ready version={version}"));
                 *runtime = Some(PlayerRuntime {
                     sender: sender.clone(),
                     worker,
@@ -390,13 +498,16 @@ impl NativePlayerState {
                 Ok(sender)
             }
             Ok(Err(error)) => {
+                diagnostic_log(format!("native_player runtime=error stage=worker_init error={error}"));
                 let _ = worker.join();
                 Err(error)
             }
             Err(_) => {
                 let _ = sender.send(PlayerCommand::Shutdown);
                 drop(worker);
-                Err("Timeout durante l'inizializzazione di libmpv.".to_string())
+                let error = "Timeout durante l'inizializzazione di libmpv.".to_string();
+                diagnostic_log(format!("native_player runtime=error stage=worker_timeout error={error}"));
+                Err(error)
             }
         }
     }
@@ -557,19 +668,31 @@ fn player_worker(
     receiver: Receiver<PlayerCommand>,
     ready: Sender<Result<String, String>>,
 ) {
+    diagnostic_log(format!(
+        "native_player worker=start dll={} osc={} hwnd={} initial_fullscreen={}",
+        dll_path.display(),
+        osc_path.display(),
+        parent_window_handle,
+        initial_fullscreen
+    ));
     let api = match MpvApi::load(&dll_path) {
         Ok(api) => api,
         Err(error) => {
+            diagnostic_log(format!("native_player worker=error stage=load_dll error={error}"));
             let _ = ready.send(Err(error));
             return;
         }
     };
     let version = api.version_string();
+    diagnostic_log(format!("native_player worker=libmpv_loaded version={version}"));
     let handle = unsafe { (api.create)() };
     if handle.is_null() {
-        let _ = ready.send(Err("mpv_create ha restituito un handle nullo.".to_string()));
+        let error = "mpv_create ha restituito un handle nullo.".to_string();
+        diagnostic_log(format!("native_player worker=error stage=mpv_create error={error}"));
+        let _ = ready.send(Err(error));
         return;
     }
+    diagnostic_log("native_player worker=mpv_create_ok");
 
     let registry = Box::new(NativeMediaSourceRegistry::new());
     let registry_ptr = (&*registry as *const NativeMediaSourceRegistry) as *mut c_void;
@@ -628,11 +751,16 @@ fn player_worker(
     })();
 
     if let Err(error) = configure {
+        diagnostic_log(format!("native_player worker=error stage=configure error={error}"));
         unsafe { (api.terminate_destroy)(handle) };
         let _ = ready.send(Err(error));
         return;
     }
 
+    diagnostic_log(format!(
+        "native_player worker=configured player_backend=libmpv media_source=native_media_source ui={} version={version}",
+        UI_NAME
+    ));
     let _ = ready.send(Ok(version));
     let mut running = true;
     let mut last_fullscreen_request = String::new();
@@ -684,12 +812,15 @@ fn player_worker(
                         api.set_property(handle, "pause", "no")?;
                         Ok(())
                     });
-                    if result.is_ok() {
-                        eprintln!(
+                    match &result {
+                        Ok(()) => diagnostic_log(format!(
                             "native_player event=open player_backend=libmpv media_source=native_media_source ui={} start_seconds={:.3}",
                             UI_NAME,
                             start_seconds.max(0.0)
-                        );
+                        )),
+                        Err(error) => diagnostic_log(format!(
+                            "native_player event=open_failed stage=worker_open error={error}"
+                        )),
                     }
                     let _ = response.send(result);
                 }
@@ -745,13 +876,16 @@ fn player_worker(
                 break;
             }
             if event_id == MPV_EVENT_FILE_LOADED {
-                eprintln!(
+                diagnostic_log(format!(
                     "native_player event=file_loaded player_backend=libmpv media_source=native_media_source ui={}",
                     UI_NAME
-                );
+                ));
             }
             if event_id == MPV_EVENT_END_FILE {
-                eprintln!("native_player event=end_file player_backend=libmpv ui={}", UI_NAME);
+                diagnostic_log(format!(
+                    "native_player event=end_file player_backend=libmpv ui={}",
+                    UI_NAME
+                ));
                 running = false;
                 break;
             }
@@ -788,7 +922,10 @@ fn player_worker(
         let _ = window.set_fullscreen(initial_fullscreen);
         let _ = window.set_focus();
     }
-    eprintln!("native_player event=closed player_backend=libmpv ui={}", UI_NAME);
+    diagnostic_log(format!(
+        "native_player event=closed player_backend=libmpv ui={}",
+        UI_NAME
+    ));
 }
 
 fn configured_value(name: &str, compiled: Option<&'static str>) -> Option<String> {
@@ -863,6 +1000,12 @@ pub fn initialize(app: &mut tauri::App) -> Result<NativePlayerState, String> {
         .path()
         .resource_dir()
         .map_err(|error| format!("Resource directory Tauri non disponibile: {error}"))?;
+    diagnostic_session_start(&resource_dir);
+    diagnostic_log(format!(
+        "native_player initialize=ok enabled={} resource_dir={}",
+        native_player_enabled(),
+        resource_dir.display()
+    ));
     Ok(NativePlayerState::new(resource_dir))
 }
 
@@ -890,7 +1033,9 @@ pub struct NativePlayerLaunch {
 #[tauri::command]
 pub fn baia_core_native_player_status(player: State<'_, NativePlayerState>) -> NativePlayerStatus {
     let enabled = native_player_enabled();
+    diagnostic_log(format!("native_player status=request enabled={enabled}"));
     if !enabled {
+        diagnostic_log("native_player status=result available=false reason=disabled");
         return NativePlayerStatus {
             enabled,
             available: false,
@@ -902,24 +1047,35 @@ pub fn baia_core_native_player_status(player: State<'_, NativePlayerState>) -> N
         };
     }
     match player.probe() {
-        Ok(version) => NativePlayerStatus {
-            enabled,
-            available: true,
-            backend: BACKEND_NAME,
-            ui: UI_NAME,
-            media_source: "native_media_source",
-            version: Some(version),
-            detail: None,
-        },
-        Err(error) => NativePlayerStatus {
-            enabled,
-            available: false,
-            backend: BACKEND_NAME,
-            ui: UI_NAME,
-            media_source: "native_media_source",
-            version: None,
-            detail: Some(error),
-        },
+        Ok(version) => {
+            diagnostic_log(format!(
+                "native_player status=result available=true backend={} media_source=native_media_source ui={} version={version}",
+                BACKEND_NAME, UI_NAME
+            ));
+            NativePlayerStatus {
+                enabled,
+                available: true,
+                backend: BACKEND_NAME,
+                ui: UI_NAME,
+                media_source: "native_media_source",
+                version: Some(version),
+                detail: None,
+            }
+        }
+        Err(error) => {
+            diagnostic_log(format!(
+                "native_player status=result available=false error={error}"
+            ));
+            NativePlayerStatus {
+                enabled,
+                available: false,
+                backend: BACKEND_NAME,
+                ui: UI_NAME,
+                media_source: "native_media_source",
+                version: None,
+                detail: Some(error),
+            }
+        }
     }
 }
 
@@ -935,43 +1091,108 @@ pub async fn baia_core_native_player_open(
     core_state: State<'_, CoreState>,
     player: State<'_, NativePlayerState>,
 ) -> Result<NativePlayerLaunch, String> {
+    diagnostic_log(format!(
+        "native_player open=request movie_id={} requested_start_seconds={:?} requested_volume={:?}",
+        movie_id, start_seconds, volume
+    ));
+
     if !native_player_enabled() {
-        return Err(format!(
+        let error = format!(
             "Native player disattivato tramite {NATIVE_VIDEO_PLAYER_ENV}."
+        );
+        diagnostic_log(format!(
+            "native_player open=failed stage=enabled_check fallback=webview error={error}"
         ));
+        return Err(error);
     }
     if movie_id == 0 {
-        return Err("movieId non valido per il native player.".to_string());
+        let error = "movieId non valido per il native player.".to_string();
+        diagnostic_log(format!(
+            "native_player open=failed stage=movie_id fallback=webview error={error}"
+        ));
+        return Err(error);
     }
-    player.probe()?;
+
+    if let Err(error) = player.probe() {
+        diagnostic_log(format!(
+            "native_player open=failed stage=probe fallback=webview error={error}"
+        ));
+        return Err(error);
+    }
+    diagnostic_log("native_player open=probe_ok");
 
     // Il frontend passa solo l'identificatore logico e dati di presentazione.
     // URL, autorizzazione, certificati e chiavi restano nel Core Rust.
-    let media_source = NativeMediaSourceTemplate::for_movie(movie_id, &core_state)?;
+    let media_source = match NativeMediaSourceTemplate::for_movie(movie_id, &core_state) {
+        Ok(media_source) => {
+            diagnostic_log(format!(
+                "native_player open=media_source_ready movie_id={} media_source=native_media_source",
+                movie_id
+            ));
+            media_source
+        }
+        Err(error) => {
+            diagnostic_log(format!(
+                "native_player open=failed stage=media_source fallback=webview error={error}"
+            ));
+            return Err(error);
+        }
+    };
+
     let main_window = app
         .get_window(MAIN_WINDOW_LABEL)
-        .ok_or_else(|| "Finestra principale Baia non disponibile.".to_string())?;
+        .ok_or_else(|| "Finestra principale Baia non disponibile.".to_string());
+    let main_window = match main_window {
+        Ok(window) => window,
+        Err(error) => {
+            diagnostic_log(format!(
+                "native_player open=failed stage=main_window fallback=webview error={error}"
+            ));
+            return Err(error);
+        }
+    };
 
     #[cfg(target_os = "windows")]
-    let parent_window_handle = main_window
-        .hwnd()
-        .map_err(|error| format!("HWND principale Baia non disponibile: {error}"))?
-        .0 as usize;
+    let parent_window_handle = match main_window.hwnd() {
+        Ok(handle) => handle.0 as usize,
+        Err(error) => {
+            let message = format!("HWND principale Baia non disponibile: {error}");
+            diagnostic_log(format!(
+                "native_player open=failed stage=hwnd fallback=webview error={message}"
+            ));
+            return Err(message);
+        }
+    };
 
     #[cfg(not(target_os = "windows"))]
     let parent_window_handle = 0usize;
 
     if parent_window_handle == 0 {
-        return Err("HWND principale Baia non disponibile.".to_string());
+        let error = "HWND principale Baia non disponibile.".to_string();
+        diagnostic_log(format!(
+            "native_player open=failed stage=hwnd_zero fallback=webview error={error}"
+        ));
+        return Err(error);
     }
+
     let initial_fullscreen = main_window.is_fullscreen().unwrap_or(false);
+    diagnostic_log(format!(
+        "native_player open=window_ready hwnd={} initial_fullscreen={}",
+        parent_window_handle, initial_fullscreen
+    ));
+
     let title = clean_text(title, "Baia Cinghiala", 180);
     let meta = clean_meta(meta);
     let accent = clean_accent(accent);
-    let start_seconds = start_seconds.filter(|value| value.is_finite() && *value >= 0.0).unwrap_or(0.0);
-    let volume = volume.filter(|value| value.is_finite()).unwrap_or(100.0).clamp(0.0, 100.0);
+    let start_seconds = start_seconds
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .unwrap_or(0.0);
+    let volume = volume
+        .filter(|value| value.is_finite())
+        .unwrap_or(100.0)
+        .clamp(0.0, 100.0);
 
-    player.open(
+    match player.open(
         media_source,
         app,
         parent_window_handle,
@@ -981,7 +1202,21 @@ pub async fn baia_core_native_player_open(
         accent,
         start_seconds,
         volume,
-    )?;
+    ) {
+        Ok(()) => {
+            diagnostic_log(format!(
+                "native_player open=success player_backend={} media_source=native_media_source ui={} movie_id={}",
+                BACKEND_NAME, UI_NAME, movie_id
+            ));
+        }
+        Err(error) => {
+            diagnostic_log(format!(
+                "native_player open=failed stage=player_open fallback=webview movie_id={} error={error}",
+                movie_id
+            ));
+            return Err(error);
+        }
+    }
 
     Ok(NativePlayerLaunch {
         started: true,
