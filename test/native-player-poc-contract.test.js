@@ -42,7 +42,7 @@ test('video native path usa baia:// stream callback e bypassa Media Bridge local
   const nativePlayer = read('src-tauri/src/native_player.rs');
   const nativeSource = read('src-tauri/src/native_media_source.rs');
 
-  assert.match(nativePlayer, /BACKEND_NAME: &str = "libmpv-baia-native-source"/);
+  assert.match(nativePlayer, /BACKEND_NAME: &str = "libmpv-render-api-native-source"/);
   assert.match(nativePlayer, /mpv_stream_cb_add_ro\\0/);
   assert.match(nativePlayer, /stream_open_callback/);
   assert.match(nativeSource, /const PROTOCOL: &str = "baia"/);
@@ -56,42 +56,74 @@ test('video native path usa baia:// stream callback e bypassa Media Bridge local
   assert.doesNotMatch(nativeSource, /TcpListener/);
 });
 
-test('player usa libmpv in-process come child HWND della finestra Baia, senza seconda top-level window', () => {
+test('player usa libmpv Render API OpenGL con compositor nativo Baia separato dal Core mpv', () => {
   const nativePlayer = read('src-tauri/src/native_player.rs');
+  const tauriConfig = read('src-tauri/tauri.conf.json');
+  const films = read('public/js/films.js');
+  const shell = read('public/js/app-shell.js');
 
   assert.match(nativePlayer, /Library::new\(path\)/);
   assert.match(nativePlayer, /mpv_create\\0/);
   assert.match(nativePlayer, /mpv_initialize\\0/);
-  assert.match(nativePlayer, /api\.set_option\(handle, "script", &osc\)/);
-  assert.match(nativePlayer, /main_window\s*=\s*app[\s\S]*get_window\(MAIN_WINDOW_LABEL\)/);
-  assert.match(nativePlayer, /\.hwnd\(\)/);
-  assert.match(nativePlayer, /api\.set_option\(handle, "wid", &wid\.to_string\(\)\)/);
-  assert.match(nativePlayer, /MPV_EVENT_FILE_LOADED/);
-  assert.match(nativePlayer, /user-data\/baia\/fullscreen-request/);
-  assert.match(nativePlayer, /window\.set_fullscreen\(desired\)/);
-  assert.doesNotMatch(nativePlayer, /WindowBuilder::new/);
-  assert.doesNotMatch(nativePlayer, /NATIVE_PLAYER_WINDOW_LABEL/);
-  assert.doesNotMatch(nativePlayer, /Player nativo/);
-  assert.doesNotMatch(nativePlayer, /Command::new\(mpv_executable/);
+  assert.match(nativePlayer, /mpv_render_context_create\\0/);
+  assert.match(nativePlayer, /mpv_render_context_render\\0/);
+  assert.match(nativePlayer, /MPV_RENDER_PARAM_OPENGL_FBO/);
+  assert.match(nativePlayer, /api\.set_option\(handle, "vo", "libmpv"\)/);
+  assert.match(nativePlayer, /BaiaMpvNativeCompositor/);
+  assert.match(nativePlayer, /wglCreateContext/);
+  assert.doesNotMatch(nativePlayer, /api\.set_option\(handle, "wid"/);
+  assert.doesNotMatch(nativePlayer, /configure_script/);
+  assert.match(nativePlayer, /mpv_render_context_set_update_callback\\0/);
+  assert.match(nativePlayer, /baia-player-render/);
+  assert.match(nativePlayer, /PeekMessageW/);
+  assert.match(nativePlayer, /message_loop=render_thread/);
+  assert.match(nativePlayer, /set_main_webview_visible\(&app, false, "file_loaded_native_compositor"\)/);
+  assert.match(tauriConfig, /"transparent": false/);
+  assert.doesNotMatch(films, /native-render-active/);
+  assert.match(films, /uiCloseRequested/);
+  assert.doesNotMatch(shell, /shell-native-video-surface/);
 });
 
-test('OSC Baia sostituisce solo presentazione e controlli sopra mpv', () => {
-  const osc = read('src-tauri/resources/mpv/baia-osc.lua');
-  const tauriConfig = read('src-tauri/tauri.conf.json');
+test('transizione native-first non espone il player WebView e usa maschere AA dagli SVG Baia', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+  const films = read('public/js/films.js');
 
-  assert.match(osc, /require 'mp'/);
-  assert.match(osc, /require 'mp\.assdraw'/);
-  assert.match(osc, /mp\.create_osd_overlay\('ass-events'\)/);
-  assert.match(osc, /Indietro/);
-  assert.match(osc, /cycle', 'pause/);
-  assert.match(osc, /absolute-percent\+keyframes/);
-  assert.match(osc, /set_property_number\('volume'/);
-  assert.match(osc, /user-data\/baia\/fullscreen-request/);
-  assert.match(osc, /request_fullscreen/);
-  assert.match(osc, /mp\.command\('quit'\)/);
-  assert.match(osc, /demuxer|paused-for-cache|Caricamento/);
-  assert.match(osc, /complex = true/);
-  assert.match(tauriConfig, /resources\/mpv\/\*\.lua/);
+  const nativeUi = films.match(/function enterNativePlayerUi\([\s\S]*?\n}/)?.[0] || '';
+  assert.match(nativeUi, /elements\.detailView\.hidden = false/);
+  assert.match(nativeUi, /elements\.playerView\.hidden = true/);
+  assert.doesNotMatch(nativeUi, /elements\.playerView\.hidden = false/);
+  assert.match(nativePlayer, /"open_native_compositor"/);
+  assert.match(nativePlayer, /"open_failed_native_compositor"/);
+
+  for (const asset of [
+    'chevron-left-16.alpha',
+    'play-27.alpha',
+    'pause-27.alpha',
+    'fullscreen-enter-25.alpha',
+    'fullscreen-exit-25.alpha',
+    'volume-29.alpha',
+  ]) assert.match(nativePlayer, new RegExp(asset.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+
+  assert.match(nativePlayer, /glTexParameteri\(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR\)/);
+  assert.match(nativePlayer, /glTexParameteri\(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR\)/);
+  assert.match(nativePlayer, /ui_renderer=textured_svg source=webview_icons filter=linear antialias=alpha/);
+  assert.match(nativePlayer, /smooth_circle\(&self\.ui_textures, seek_x, seek_y, 16\.0, accent\)/);
+});
+
+test('controlli Phase 6B appartengono al compositor Baia e non all OSC mpv', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+  const films = read('public/js/films.js');
+
+  assert.match(nativePlayer, /UI_NAME: &str = "baia-native-compositor"/);
+  assert.match(nativePlayer, /SurfaceAction::TogglePause/);
+  assert.match(nativePlayer, /SurfaceAction::SeekAbsolute/);
+  assert.match(nativePlayer, /SurfaceAction::SetVolume/);
+  assert.match(nativePlayer, /SurfaceAction::ToggleFullscreen/);
+  assert.match(nativePlayer, /SurfaceAction::RequestClose/);
+  assert.match(nativePlayer, /draw_baia_controls/);
+  assert.match(nativePlayer, /ui_close_requested/);
+  assert.match(films, /uiCloseRequested/);
+  assert.doesNotMatch(nativePlayer, /configure_script/);
 });
 
 test('Core espone controlli high-level e diagnostica player + source', () => {
@@ -155,13 +187,12 @@ test('NativeMediaSource non usa cancel_fn aggressivo e mantiene due pool TLS bou
   assert.match(connectorTls, /tcp_keepalive/);
 });
 
-test('bundle NSIS include libmpv e OSC locali senza versionare la DLL', () => {
+test('bundle NSIS include libmpv locale senza versionare la DLL', () => {
   const tauriConfig = read('src-tauri/tauri.conf.json');
   const gitignore = read('.gitignore');
   const prepareScript = read('scripts/prepare-libmpv-windows.ps1');
 
   assert.match(tauriConfig, /resources\/libmpv\/\*\.dll/);
-  assert.match(tauriConfig, /resources\/mpv\/\*\.lua/);
   assert.match(gitignore, /src-tauri\/resources\/libmpv\/\*\.dll/);
   assert.match(prepareScript, /libmpv-2\.dll/);
 });

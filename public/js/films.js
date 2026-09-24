@@ -43,6 +43,11 @@ const state = {
   nativePlaybackLastSeconds: null,
   nativePlaybackLastDuration: null,
   nativePlaybackLastSavedSeconds: null,
+  nativeUiActive: false,
+  nativePlaybackPaused: true,
+  nativePlaybackIdle: true,
+  nativePlaybackSeeking: false,
+  nativePlaybackBuffering: false,
 };
 
 const TOUCH_LAYOUT_QUERY = '(hover: none) and (pointer: coarse)';
@@ -314,18 +319,30 @@ function formatPlayerTime(seconds) {
   return [hours, minutes, secs].map((value) => String(value).padStart(2, '0')).join(':');
 }
 
+function playerDurationSeconds() {
+  if (state.nativeUiActive) return Number.isFinite(state.nativePlaybackLastDuration) ? Math.max(0, state.nativePlaybackLastDuration) : 0;
+  return Number.isFinite(elements.videoPlayer.duration) ? Math.max(0, elements.videoPlayer.duration) : 0;
+}
+
+function playerCurrentSeconds() {
+  if (state.nativeUiActive) return Number.isFinite(state.nativePlaybackLastSeconds) ? Math.max(0, state.nativePlaybackLastSeconds) : 0;
+  return Number.isFinite(elements.videoPlayer.currentTime) ? Math.max(0, elements.videoPlayer.currentTime) : 0;
+}
+
+function playerIsPaused() {
+  if (state.nativeUiActive) return state.nativePlaybackPaused || state.nativePlaybackIdle;
+  return elements.videoPlayer.paused || elements.videoPlayer.ended;
+}
+
 function clampPlayerTime(seconds) {
-  const duration = Number.isFinite(elements.videoPlayer.duration) ? elements.videoPlayer.duration : 0;
+  const duration = playerDurationSeconds();
   if (!duration) return Math.max(0, Number(seconds) || 0);
   return Math.max(0, Math.min(duration, Number(seconds) || 0));
 }
 
 function updatePlayerTimeline(previewSeconds = null) {
-  const player = elements.videoPlayer;
-  const duration = Number.isFinite(player.duration) ? Math.max(0, player.duration) : 0;
-  const current = previewSeconds === null
-    ? (Number.isFinite(player.currentTime) ? player.currentTime : 0)
-    : clampPlayerTime(previewSeconds);
+  const duration = playerDurationSeconds();
+  const current = previewSeconds === null ? playerCurrentSeconds() : clampPlayerTime(previewSeconds);
   const remaining = Math.max(0, duration - current);
   const percentage = duration > 0 ? Math.max(0, Math.min(100, current / duration * 100)) : 0;
 
@@ -338,7 +355,7 @@ function updatePlayerTimeline(previewSeconds = null) {
 }
 
 function updatePlayPauseControl() {
-  const isPlaying = !elements.videoPlayer.paused && !elements.videoPlayer.ended;
+  const isPlaying = !playerIsPaused();
   elements.playPauseButton.setAttribute('aria-label', isPlaying ? 'Metti in pausa' : 'Riproduci');
   elements.playPauseButton.title = isPlaying ? 'Pausa (Spazio)' : 'Riproduci (Spazio)';
   elements.playPauseIcon.className = `film-icon ${isPlaying ? 'pause-icon' : 'play-icon'}`;
@@ -407,7 +424,11 @@ function readPlayerSetting(key, fallback) {
 function setPlayerVolume(value, { persist = true } = {}) {
   const volume = clampPlayerSetting(value, 0, 100, 100);
   elements.playerVolume.value = String(Math.round(volume));
-  elements.videoPlayer.volume = volume / 100;
+  if (state.nativeUiActive) {
+    window.BaiaApi.nativeVideoPlayerSetVolume(volume).catch((error) => console.warn('Volume native player non aggiornato.', error));
+  } else {
+    elements.videoPlayer.volume = volume / 100;
+  }
   elements.playerVolume.setAttribute('aria-valuetext', `${Math.round(volume)}%`);
   updateSideSliderProgress(elements.playerVolume, volume);
   if (persist) persistPlayerSetting(PLAYER_VOLUME_STORAGE_KEY, Math.round(volume));
@@ -437,8 +458,7 @@ async function requestPlayerWakeLock() {
   if (!('wakeLock' in navigator)
     || document.visibilityState !== 'visible'
     || elements.playerView.hidden
-    || elements.videoPlayer.paused
-    || elements.videoPlayer.ended
+    || playerIsPaused()
     || state.wakeLockSentinel) return;
 
   try {
@@ -470,8 +490,7 @@ function shouldAutoHidePlayerControls() {
   return Boolean(
     !elements.playerView.hidden
     && isPlayerFullscreen()
-    && !elements.videoPlayer.paused
-    && !elements.videoPlayer.ended
+    && !playerIsPaused()
     && !state.scrubbing
   );
 }
@@ -496,7 +515,14 @@ function syncPlayerControlsVisibility() {
 
 async function togglePlayback() {
   if (!state.playbackGateOpen) return;
-  if (elements.videoPlayer.paused || elements.videoPlayer.ended) {
+  if (state.nativeUiActive) {
+    try {
+      if (playerIsPaused()) await window.BaiaApi.nativeVideoPlayerPlay();
+      else await window.BaiaApi.nativeVideoPlayerPause();
+    } catch (error) {
+      console.warn('Comando play/pause native player non riuscito.', error);
+    }
+  } else if (elements.videoPlayer.paused || elements.videoPlayer.ended) {
     try { await elements.videoPlayer.play(); } catch (error) { console.error(error); }
   } else {
     elements.videoPlayer.pause();
@@ -531,7 +557,12 @@ function applyQueuedSeek(force = false) {
     const target = clampPlayerTime(state.pendingSeekSeconds);
     state.pendingSeekSeconds = null;
     state.lastSeekAppliedAt = Date.now();
-    elements.videoPlayer.currentTime = target;
+    if (state.nativeUiActive) {
+      window.BaiaApi.nativeVideoPlayerSeek(target).catch((error) => console.warn('Seek native player non riuscito.', error));
+      state.nativePlaybackLastSeconds = target;
+    } else {
+      elements.videoPlayer.currentTime = target;
+    }
   };
 
   if (force) {
@@ -549,8 +580,11 @@ function beginScrubbing() {
   if (state.scrubbing || !state.playerReady) return;
   state.scrubbing = true;
   showPlayerControls({ restartTimer: false });
-  state.resumeAfterScrub = !elements.videoPlayer.paused && !elements.videoPlayer.ended;
-  if (state.resumeAfterScrub) elements.videoPlayer.pause();
+  state.resumeAfterScrub = !playerIsPaused();
+  if (state.resumeAfterScrub) {
+    if (state.nativeUiActive) window.BaiaApi.nativeVideoPlayerPause().catch(() => {});
+    else elements.videoPlayer.pause();
+  }
 }
 
 async function finishScrubbing() {
@@ -559,11 +593,13 @@ async function finishScrubbing() {
   applyQueuedSeek(true);
   state.scrubbing = false;
   updatePlayerTimeline();
-  state.progressLastObservedSeconds = Number.isFinite(elements.videoPlayer.currentTime)
-    ? elements.videoPlayer.currentTime
-    : null;
+  state.progressLastObservedSeconds = playerCurrentSeconds();
   if (state.resumeAfterScrub) {
-    try { await elements.videoPlayer.play(); } catch {}
+    if (state.nativeUiActive) {
+      try { await window.BaiaApi.nativeVideoPlayerPlay(); } catch {}
+    } else {
+      try { await elements.videoPlayer.play(); } catch {}
+    }
   }
   state.resumeAfterScrub = false;
   syncPlayerControlsVisibility();
@@ -571,8 +607,13 @@ async function finishScrubbing() {
 
 function seekBy(seconds) {
   if (!state.playerReady) return;
-  const target = clampPlayerTime(elements.videoPlayer.currentTime + seconds);
-  elements.videoPlayer.currentTime = target;
+  const target = clampPlayerTime(playerCurrentSeconds() + seconds);
+  if (state.nativeUiActive) {
+    state.nativePlaybackLastSeconds = target;
+    window.BaiaApi.nativeVideoPlayerSeek(target).catch((error) => console.warn('Seek native player non riuscito.', error));
+  } else {
+    elements.videoPlayer.currentTime = target;
+  }
   state.progressLastObservedSeconds = null;
   updatePlayerTimeline(target);
 }
@@ -1213,6 +1254,10 @@ function clearNativePlaybackMonitor() {
   state.nativePlaybackLastSeconds = null;
   state.nativePlaybackLastDuration = null;
   state.nativePlaybackLastSavedSeconds = null;
+  state.nativePlaybackPaused = true;
+  state.nativePlaybackIdle = true;
+  state.nativePlaybackSeeking = false;
+  state.nativePlaybackBuffering = false;
 }
 
 async function saveNativeProgressSnapshot(movieId, seconds, durationSeconds) {
@@ -1254,11 +1299,36 @@ function startNativePlaybackMonitor(movie) {
       const seconds = Number(playback?.timePos);
       const duration = Number(playback?.duration);
       const nativeVolume = Number(playback?.volume);
-      if (Number.isFinite(nativeVolume)) persistPlayerSetting(PLAYER_VOLUME_STORAGE_KEY, Math.round(nativeVolume));
+      state.nativePlaybackPaused = Boolean(playback?.paused);
+      state.nativePlaybackIdle = Boolean(playback?.idle);
+      state.nativePlaybackSeeking = Boolean(playback?.seeking);
+      state.nativePlaybackBuffering = Boolean(playback?.pausedForCache);
+      if (playback?.uiCloseRequested && state.nativeUiActive) {
+        // Il compositor ha già completato il teardown nativo prima di
+        // riesporre la WebView: qui chiudiamo soltanto lo stato UI Baia.
+        await closePlayer({ nativeAlreadyClosed: true });
+        return;
+      }
+      if (Number.isFinite(nativeVolume)) {
+        elements.playerVolume.value = String(Math.round(nativeVolume));
+        updateSideSliderProgress(elements.playerVolume, nativeVolume);
+        persistPlayerSetting(PLAYER_VOLUME_STORAGE_KEY, Math.round(nativeVolume));
+      }
+      if (Number.isFinite(seconds)) state.nativePlaybackLastSeconds = seconds;
+      if (Number.isFinite(duration)) state.nativePlaybackLastDuration = duration;
+
+      if (state.nativeUiActive) {
+        state.playerReady = Number.isFinite(duration) && duration > 0;
+        if (!state.scrubbing) updatePlayerTimeline();
+        updatePlayPauseControl();
+        setPlayerLoading(state.nativePlaybackSeeking || state.nativePlaybackBuffering, { delayed: true });
+        syncPlayerControlsVisibility();
+        if (playerIsPaused()) releasePlayerWakeLock();
+        else requestPlayerWakeLock();
+      }
+
       if (playback?.active && !playback?.idle) {
         state.nativePlaybackSeenActive = true;
-        if (Number.isFinite(seconds)) state.nativePlaybackLastSeconds = seconds;
-        if (Number.isFinite(duration)) state.nativePlaybackLastDuration = duration;
         const lastSaved = Number(state.nativePlaybackLastSavedSeconds);
         if (Number.isFinite(seconds) && (!Number.isFinite(lastSaved) || Math.abs(seconds - lastSaved) >= PROGRESS_CHECKPOINT_SECONDS)) {
           await saveNativeProgressSnapshot(movie.id, seconds, duration);
@@ -1271,6 +1341,13 @@ function startNativePlaybackMonitor(movie) {
         const finalDuration = Number.isFinite(state.nativePlaybackLastDuration) ? state.nativePlaybackLastDuration : 0;
         await saveNativeProgressSnapshot(movie.id, finalSeconds, finalDuration);
         clearNativePlaybackMonitor();
+        if (state.nativeUiActive) {
+          state.nativePlaybackPaused = true;
+          state.nativePlaybackIdle = true;
+          updatePlayPauseControl();
+          showPlayerControls({ restartTimer: false });
+          setPlayerLoading(false);
+        }
         updateDetailActions();
       }
     } catch (error) {
@@ -1278,7 +1355,7 @@ function startNativePlaybackMonitor(movie) {
     } finally {
       polling = false;
     }
-  }, 1000);
+  }, 250);
 }
 
 function nativePlayerAccent() {
@@ -1288,6 +1365,17 @@ function nativePlayerAccent() {
 
 function saveProgressOnPageExit() {
   const movie = state.activeMovie;
+  if (state.nativeUiActive) {
+    const seconds = Number(state.nativePlaybackLastSeconds);
+    const durationSeconds = Number(state.nativePlaybackLastDuration);
+    if (!movie || !Number.isFinite(seconds)) return;
+    window.BaiaPage.apiRequest(`/api/movies/${movie.id}/progress`, {
+      method: 'PUT',
+      body: JSON.stringify({ seconds: Math.max(0, seconds), durationSeconds: Number.isFinite(durationSeconds) ? Math.max(0, durationSeconds) : 0 }),
+      keepalive: true,
+    }).catch(() => {});
+    return;
+  }
   const player = elements.videoPlayer;
   if (!state.playerReady || !movie || !Number.isFinite(player.currentTime)) return;
 
@@ -1306,6 +1394,44 @@ function saveProgressOnPageExit() {
   }).catch(() => {});
 }
 
+function enterNativePlayerUi(movie, { restart = false } = {}) {
+  state.nativeUiActive = true;
+  state.playbackGateOpen = true;
+  state.playerReady = false;
+  state.scrubbing = false;
+  state.resumeAfterScrub = false;
+  state.pendingSeekSeconds = null;
+  clearTimeout(state.seekTimer);
+  state.seekTimer = null;
+
+  elements.playerTitle.textContent = movie.title;
+  elements.playerMeta.textContent = movieMeta(movie);
+  // Il player nativo non deve mai esporre il vecchio player WebView durante
+  // la transizione. Manteniamo la scheda film come stato DOM di ritorno: Rust
+  // nasconde la WebView non appena il compositor nativo e pronto e, alla
+  // chiusura, la riespone direttamente sulla scheda film.
+  elements.detailView.hidden = false;
+  elements.playerView.hidden = true;
+  window.BaiaPage.shellContextBack?.(true);
+  elements.playerStage.classList.remove('player-controls-hidden');
+  elements.videoPlayer.pause();
+  elements.videoPlayer.removeAttribute('src');
+  elements.videoPlayer.load();
+
+  const startSeconds = !restart && hasResumableProgress(movie) ? Number(movie.progressSeconds) : 0;
+  state.nativePlaybackLastSeconds = Number.isFinite(startSeconds) ? Math.max(0, startSeconds) : 0;
+  state.nativePlaybackLastDuration = Number.isFinite(Number(movie.durationSeconds)) ? Number(movie.durationSeconds) : null;
+  state.nativePlaybackPaused = false;
+  state.nativePlaybackIdle = false;
+  state.nativePlaybackSeeking = false;
+  state.nativePlaybackBuffering = true;
+  setPlayerLoading(true);
+  updatePlayerTimeline(state.nativePlaybackLastSeconds);
+  updatePlayPauseControl();
+  updateFullscreenControl();
+  showPlayerControls({ restartTimer: false });
+}
+
 async function startPlayback({ restart = false } = {}) {
   const movie = state.activeMovie;
   if (!movie) return;
@@ -1319,6 +1445,7 @@ async function startPlayback({ restart = false } = {}) {
   });
   if (nativePlayback.used) {
     resetProgressTracking(movie);
+    enterNativePlayerUi(movie, { restart });
     startNativePlaybackMonitor(movie);
     return;
   }
@@ -1460,10 +1587,28 @@ async function saveProgress(force = false) {
   return state.progressSaveQueue;
 }
 
-async function closePlayer() {
+async function closePlayer({ nativeAlreadyClosed = false } = {}) {
   state.playbackRequestId += 1;
   state.playbackGateOpen = true;
-  await saveProgress(true);
+
+  if (state.nativeUiActive) {
+    const movieId = state.activeMovie?.id;
+    const seconds = Number(state.nativePlaybackLastSeconds);
+    const duration = Number(state.nativePlaybackLastDuration);
+    if (Number.isSafeInteger(Number(movieId)) && Number.isFinite(seconds)) {
+      await saveNativeProgressSnapshot(movieId, seconds, duration);
+    }
+    if (!nativeAlreadyClosed) {
+      try { await window.BaiaApi.stopNativeVideoPlayer(); } catch (error) {
+        console.warn('Arresto native player non riuscito.', error);
+      }
+    }
+    clearNativePlaybackMonitor();
+    state.nativeUiActive = false;
+  } else {
+    await saveProgress(true);
+  }
+
   if (isPlayerFullscreen()) {
     try { await document.exitFullscreen(); } catch {}
   }
@@ -1741,12 +1886,13 @@ document.addEventListener('fullscreenchange', () => {
 });
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
-    state.progressLastObservedSeconds = Number.isFinite(elements.videoPlayer.currentTime)
-      ? elements.videoPlayer.currentTime
-      : null;
+    state.progressLastObservedSeconds = state.nativeUiActive
+      ? state.nativePlaybackLastSeconds
+      : (Number.isFinite(elements.videoPlayer.currentTime) ? elements.videoPlayer.currentTime : null);
     requestPlayerWakeLock();
   } else {
-    saveProgress(true);
+    if (state.nativeUiActive) saveProgressOnPageExit();
+    else saveProgress(true);
     releasePlayerWakeLock();
   }
 });
