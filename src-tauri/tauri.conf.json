@@ -40,7 +40,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "resources/libmpv/*.dll": "libmpv/"
+      "resources/libmpv/*.dll": "libmpv/",
+      "resources/mpv/*.lua": "mpv/"
     }
   },
   "plugins": {

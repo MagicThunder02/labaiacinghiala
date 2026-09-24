@@ -963,14 +963,9 @@ function saveProgressOnPageExit() {
 async function startPlayback(episode, { restart = false } = {}) {
   if (!episode) return;
 
-  // Fase 1 roadmap: quando il flag esplicito e attivo, il Core Rust apre
-  // lo stesso media in una finestra mpv esterna. Con flag false il flusso
-  // legacy WebView <video> qui sotto resta invariato.
-  const nativePoc = await window.BaiaApi.tryOpenNativeVideoPlayer(episode.id);
-  if (nativePoc.used) {
-    window.BaiaPage.shellToast('PoC mpv avviato in una finestra separata.');
-    return;
-  }
+  // Phase 5 rolls the native skin out to films first. Series keeps the
+  // existing WebView player until episode previous/next controls are mapped
+  // into the native OSC, avoiding a functional regression.
 
   const requestId = ++state.playbackRequestId;
   state.playbackGateOpen = false;

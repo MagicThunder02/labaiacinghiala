@@ -513,7 +513,7 @@
     return tauriCore.invoke('baia_core_native_player_status');
   }
 
-  async function tryOpenNativeVideoPlayer(movieId) {
+  async function tryOpenNativeVideoPlayer(movieId, options = {}) {
     const id = Number(movieId);
     if (!Number.isSafeInteger(id) || id <= 0) {
       throw new Error('movieId non valido per il native player.');
@@ -521,11 +521,24 @@
     const status = await nativeVideoPlayerStatus();
     if (!status?.enabled) return { used: false, status };
     if (!status.available) {
-      throw new Error(status.detail || 'Native player abilitato, ma libmpv embedded non e disponibile nel client.');
+      console.warn(status.detail || 'Native player non disponibile: uso il fallback WebView.');
+      return { used: false, status };
     }
     const tauriCore = getTauriCore();
-    const launch = await tauriCore.invoke('baia_core_native_player_open', { movieId: id });
-    return { used: true, status, launch };
+    try {
+      const launch = await tauriCore.invoke('baia_core_native_player_open', {
+        movieId: id,
+        title: String(options.title || '').trim() || null,
+        meta: String(options.meta || '').trim() || null,
+        accent: String(options.accent || '').trim() || null,
+        startSeconds: Number.isFinite(Number(options.startSeconds)) ? Math.max(0, Number(options.startSeconds)) : null,
+        volume: Number.isFinite(Number(options.volume)) ? Math.max(0, Math.min(100, Number(options.volume))) : null,
+      });
+      return { used: true, status, launch };
+    } catch (error) {
+      console.warn('Avvio Baia Native Player non riuscito: uso il fallback WebView.', error);
+      return { used: false, status, error };
+    }
   }
 
 

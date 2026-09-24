@@ -6,44 +6,97 @@ const path = require('node:path');
 const ROOT = path.resolve(__dirname, '..');
 const read = (relative) => fs.readFileSync(path.join(ROOT, relative), 'utf8');
 
-test('native player embedded resta dietro feature flag e conserva il fallback WebView', () => {
+test('Baia Native Player e il default Windows ma conserva il fallback WebView', () => {
   const envExample = read('.env.example');
+  const nativePlayer = read('src-tauri/src/native_player.rs');
   const films = read('public/js/films.js');
   const series = read('public/js/series.js');
 
-  assert.match(envExample, /BAIA_NATIVE_VIDEO_PLAYER=false/);
-  assert.match(films, /tryOpenNativeVideoPlayer\(movie\.id\)/);
+  assert.match(envExample, /# BAIA_NATIVE_VIDEO_PLAYER=false/);
+  assert.match(nativePlayer, /None => cfg!\(target_os = "windows"\)/);
+  assert.match(films, /tryOpenNativeVideoPlayer\(movie\.id, \{/);
   assert.match(films, /elements\.videoPlayer\.src = streamUrl/);
-  assert.match(series, /tryOpenNativeVideoPlayer\(episode\.id\)/);
+  assert.doesNotMatch(series, /tryOpenNativeVideoPlayer\(episode\.id/);
   assert.match(series, /elements\.videoPlayer\.src = streamUrl/);
+  assert.match(films, /startNativePlaybackMonitor\(movie\)/);
+  assert.doesNotMatch(films, /PoC mpv avviato in una finestra separata/);
+  assert.doesNotMatch(series, /PoC mpv avviato in una finestra separata/);
 });
 
-test('libmpv embedded accetta solo movieId e genera la media URL nel Core Rust', () => {
+test('libmpv riceve solo movieId e dati di presentazione; la NativeMediaSource nasce nel Core', () => {
   const nativePlayer = read('src-tauri/src/native_player.rs');
-  const mediaBridge = read('src-tauri/src/media_bridge.rs');
+  const nativeSource = read('src-tauri/src/native_media_source.rs');
 
   assert.match(nativePlayer, /baia_core_native_player_open\([\s\S]*movie_id: u64/);
-  assert.doesNotMatch(nativePlayer, /baia_core_native_player_open\([\s\S]{0,220}url: String/);
-  assert.match(nativePlayer, /bridge\.register_movie_stream\(movie_id, &core_state\)/);
-  assert.match(mediaBridge, /register_movie_stream\(&self, movie_id: u64/);
-  assert.match(mediaBridge, /\/api\/movies\/\{movie_id\}\/stream/);
+  assert.match(nativePlayer, /title: Option<String>/);
+  assert.match(nativePlayer, /start_seconds: Option<f64>/);
+  assert.doesNotMatch(nativePlayer, /baia_core_native_player_open\([\s\S]{0,500}url: String/);
+  assert.match(nativePlayer, /NativeMediaSourceTemplate::for_movie\(movie_id, &core_state\)/);
+  assert.doesNotMatch(nativePlayer, /bridge\.register_movie_stream/);
+  assert.match(nativeSource, /\/api\/movies\/\{movie_id\}\/stream/);
+  assert.match(nativeSource, /connector_tls::MEDIA_PATH/);
+  assert.match(nativeSource, /auth::authorize_media_path/);
 });
 
-test('player usa libmpv in-process e non lancia più mpv.exe', () => {
+test('video native path usa baia:// stream callback e bypassa Media Bridge localhost', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+  const nativeSource = read('src-tauri/src/native_media_source.rs');
+
+  assert.match(nativePlayer, /BACKEND_NAME: &str = "libmpv-baia-native-source"/);
+  assert.match(nativePlayer, /mpv_stream_cb_add_ro\\0/);
+  assert.match(nativePlayer, /stream_open_callback/);
+  assert.match(nativeSource, /const PROTOCOL: &str = "baia"/);
+  assert.match(nativeSource, /format!\("\{PROTOCOL\}:\/\/movie\/\{token\}"\)/);
+  assert.match(nativeSource, /INITIAL_RANGE_BYTES: usize = 1 \* 1024 \* 1024/);
+  assert.match(nativeSource, /MID_RANGE_BYTES: usize = 2 \* 1024 \* 1024/);
+  assert.match(nativeSource, /DEFAULT_MAX_RANGE_BYTES: usize = 4 \* 1024 \* 1024/);
+  assert.match(nativeSource, /DEFAULT_WINDOW_BYTES: usize = 16 \* 1024 \* 1024/);
+  assert.match(nativeSource, /VecDeque/);
+  assert.doesNotMatch(nativeSource, /127\.0\.0\.1/);
+  assert.doesNotMatch(nativeSource, /TcpListener/);
+});
+
+test('player usa libmpv in-process come child HWND della finestra Baia, senza seconda top-level window', () => {
   const nativePlayer = read('src-tauri/src/native_player.rs');
 
-  assert.match(nativePlayer, /BACKEND_NAME: &str = "libmpv-embedded-wid"/);
   assert.match(nativePlayer, /Library::new\(path\)/);
   assert.match(nativePlayer, /mpv_create\\0/);
   assert.match(nativePlayer, /mpv_initialize\\0/);
-  assert.match(nativePlayer, /"wid"/);
-  assert.match(nativePlayer, /WindowBuilder::new\(&app, NATIVE_PLAYER_WINDOW_LABEL\)/);
+  assert.match(nativePlayer, /api\.set_option\(handle, "script", &osc\)/);
+  assert.match(nativePlayer, /main_window\s*=\s*app[\s\S]*get_window\(MAIN_WINDOW_LABEL\)/);
+  assert.match(nativePlayer, /\.hwnd\(\)/);
+  assert.match(nativePlayer, /api\.set_option\(handle, "wid", &wid\.to_string\(\)\)/);
+  assert.match(nativePlayer, /MPV_EVENT_FILE_LOADED/);
+  assert.match(nativePlayer, /user-data\/baia\/fullscreen-request/);
+  assert.match(nativePlayer, /window\.set_fullscreen\(desired\)/);
+  assert.doesNotMatch(nativePlayer, /WindowBuilder::new/);
+  assert.doesNotMatch(nativePlayer, /NATIVE_PLAYER_WINDOW_LABEL/);
+  assert.doesNotMatch(nativePlayer, /Player nativo/);
   assert.doesNotMatch(nativePlayer, /Command::new\(mpv_executable/);
-  assert.doesNotMatch(nativePlayer, /BAIA_MPV_EXECUTABLE/);
 });
 
-test('Core espone controlli high-level e diagnostica senza open_url arbitrario', () => {
+test('OSC Baia sostituisce solo presentazione e controlli sopra mpv', () => {
+  const osc = read('src-tauri/resources/mpv/baia-osc.lua');
+  const tauriConfig = read('src-tauri/tauri.conf.json');
+
+  assert.match(osc, /require 'mp'/);
+  assert.match(osc, /require 'mp\.assdraw'/);
+  assert.match(osc, /mp\.create_osd_overlay\('ass-events'\)/);
+  assert.match(osc, /Indietro/);
+  assert.match(osc, /cycle', 'pause/);
+  assert.match(osc, /absolute-percent\+keyframes/);
+  assert.match(osc, /set_property_number\('volume'/);
+  assert.match(osc, /user-data\/baia\/fullscreen-request/);
+  assert.match(osc, /request_fullscreen/);
+  assert.match(osc, /mp\.command\('quit'\)/);
+  assert.match(osc, /demuxer|paused-for-cache|Caricamento/);
+  assert.match(osc, /complex = true/);
+  assert.match(tauriConfig, /resources\/mpv\/\*\.lua/);
+});
+
+test('Core espone controlli high-level e diagnostica player + source', () => {
   const nativePlayer = read('src-tauri/src/native_player.rs');
+  const nativeSource = read('src-tauri/src/native_media_source.rs');
   const apiConfig = read('public/js/api-config.js');
 
   for (const command of [
@@ -53,30 +106,70 @@ test('Core espone controlli high-level e diagnostica senza open_url arbitrario',
     'baia_core_native_player_set_volume',
     'baia_core_native_player_get_state',
     'baia_core_native_player_stop',
-  ]) {
-    assert.match(nativePlayer, new RegExp(command));
-  }
+  ]) assert.match(nativePlayer, new RegExp(command));
+
+  assert.match(nativePlayer, /player_backend=libmpv media_source=native_media_source/);
+  assert.match(nativePlayer, /ui=\{\}/);
   assert.match(nativePlayer, /demuxer-cache-duration/);
   assert.match(nativePlayer, /cache-buffering-state/);
   assert.match(nativePlayer, /hwdec-current/);
+  assert.match(nativePlayer, /NativeMediaSourceStats/);
+  assert.match(nativeSource, /remote_requests/);
+  assert.match(nativeSource, /cache_hits/);
+  assert.match(nativeSource, /last_range_elapsed_ms/);
+  assert.match(nativeSource, /cache_seek_hits/);
+  assert.match(nativeSource, /pool_slot_0_requests/);
+  assert.match(nativePlayer, /cache-speed/);
+  assert.match(nativePlayer, /demuxer-cache-idle/);
   assert.match(apiConfig, /nativeVideoPlayerState/);
+  assert.match(apiConfig, /Native player non disponibile: uso il fallback WebView/);
   assert.doesNotMatch(nativePlayer, /open_url/);
 });
 
-test('bundle NSIS può includere libmpv locale senza versionare la DLL', () => {
+test('profilo mpv conserva il buffering Phase 4', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+  for (const [name, value] of [
+    ['cache-secs', '45'],
+    ['cache-pause-wait', '5'],
+    ['demuxer-max-bytes', '64MiB'],
+    ['demuxer-max-back-bytes', '32MiB'],
+    ['demuxer-hysteresis-secs', '15'],
+    ['stream-buffer-size', '2MiB'],
+  ]) {
+    assert.match(nativePlayer, new RegExp(`api\\.set_option\\(handle, "${name}", "${value.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}"\\)`));
+  }
+  assert.match(nativePlayer, /"cache-pause-initial", "yes"/);
+  assert.match(nativePlayer, /"demuxer-seekable-cache", "yes"/);
+});
+
+test('NativeMediaSource non usa cancel_fn aggressivo e mantiene due pool TLS bounded', () => {
+  const nativeSource = read('src-tauri/src/native_media_source.rs');
+  const connectorTls = read('src-tauri/src/connector_tls.rs');
+
+  assert.match(nativeSource, /MEDIA_POOL_SIZE: usize = 2/);
+  assert.match(nativeSource, /\(\*info\)\.cancel_fn = None/);
+  assert.doesNotMatch(nativeSource, /stream_cancel_callback/);
+  assert.match(connectorTls, /pub fn blocking_media_client/);
+  assert.match(connectorTls, /pool_max_idle_per_host\(1\)/);
+  assert.match(connectorTls, /pool_idle_timeout\(None::<Duration>\)/);
+  assert.match(connectorTls, /tcp_keepalive/);
+});
+
+test('bundle NSIS include libmpv e OSC locali senza versionare la DLL', () => {
   const tauriConfig = read('src-tauri/tauri.conf.json');
   const gitignore = read('.gitignore');
   const prepareScript = read('scripts/prepare-libmpv-windows.ps1');
 
   assert.match(tauriConfig, /resources\/libmpv\/\*\.dll/);
-  assert.match(tauriConfig, /"libmpv\/"/);
+  assert.match(tauriConfig, /resources\/mpv\/\*\.lua/);
   assert.match(gitignore, /src-tauri\/resources\/libmpv\/\*\.dll/);
   assert.match(prepareScript, /libmpv-2\.dll/);
 });
 
-test('Tauri inizializza stato embedded e registra tutti i comandi mantenendo Media Bridge', () => {
+test('Tauri mantiene Media Bridge legacy soltanto come fallback', () => {
   const lib = read('src-tauri/src/lib.rs');
 
+  assert.match(lib, /mod native_media_source;/);
   assert.match(lib, /native_player::initialize\(app\)/);
   assert.match(lib, /native_player::baia_core_native_player_status/);
   assert.match(lib, /native_player::baia_core_native_player_open/);

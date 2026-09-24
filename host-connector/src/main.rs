@@ -1556,6 +1556,7 @@ fn handle_direct_media_request(
         Ok(value) => value,
         Err(error) => return write_connector_error(stream, 502, Some(request_id), "HOST_CONNECTOR_MEDIA_DESCRIPTOR_INVALID", &error),
     };
+    let control_elapsed_ms = started.elapsed().as_millis();
     let (mut file, actual_size) = match resolve_direct_media_file(&descriptor.relative_path) {
         Ok(value) => value,
         Err(error) => return write_connector_error(stream, 502, Some(request_id), "HOST_CONNECTOR_MEDIA_FILE_INVALID", &error),
@@ -1591,7 +1592,13 @@ fn handle_direct_media_request(
     };
     write_direct_media_headers(stream, status, &descriptor, content_length, content_range.as_deref(), keep_alive)?;
 
+    let requested_start = range.map(|value| value.start).unwrap_or(0);
+    let requested_end = range
+        .map(|value| value.end)
+        .unwrap_or_else(|| descriptor.size.saturating_sub(1));
+    let requested_bytes = content_length;
     let mut bytes_streamed = 0u64;
+    let mut client_disconnected = false;
     if method != Method::HEAD {
         let copy_result = if range.is_some() {
             let mut limited = file.take(content_length);
@@ -1601,14 +1608,23 @@ fn handle_direct_media_request(
         };
         match copy_result {
             Ok(bytes) => bytes_streamed = bytes,
-            Err(error) if is_client_disconnect(&error) => {}
+            Err(error) if is_client_disconnect(&error) => client_disconnected = true,
             Err(error) => return Err(format!("Streaming direct media interrotto: {error}")),
         }
     }
     stream.flush().ok();
     println!(
-        "media={} media_source=direct_file bytes_streamed={} status={} elapsed_ms={}",
-        request_id, bytes_streamed, status, started.elapsed().as_millis()
+        "media={} media_source=direct_file method={} requested_start={} requested_end={} requested_bytes={} bytes_streamed={} client_disconnected={} status={} control_elapsed_ms={} elapsed_ms={}",
+        request_id,
+        method.as_str(),
+        requested_start,
+        requested_end,
+        requested_bytes,
+        bytes_streamed,
+        client_disconnected,
+        status,
+        control_elapsed_ms,
+        started.elapsed().as_millis()
     );
     Ok(())
 }

@@ -37,6 +37,12 @@ const state = {
   progressLastSavedSeconds: null,
   progressLastSavedDuration: null,
   progressSaveQueue: Promise.resolve(),
+  nativePlaybackTimer: null,
+  nativePlaybackMovieId: null,
+  nativePlaybackSeenActive: false,
+  nativePlaybackLastSeconds: null,
+  nativePlaybackLastDuration: null,
+  nativePlaybackLastSavedSeconds: null,
 };
 
 const TOUCH_LAYOUT_QUERY = '(hover: none) and (pointer: coarse)';
@@ -1199,6 +1205,87 @@ function observeProgressPlayback() {
   if (state.progressPlaybackSinceSave >= PROGRESS_CHECKPOINT_SECONDS) saveProgress(false);
 }
 
+function clearNativePlaybackMonitor() {
+  if (state.nativePlaybackTimer) window.clearInterval(state.nativePlaybackTimer);
+  state.nativePlaybackTimer = null;
+  state.nativePlaybackMovieId = null;
+  state.nativePlaybackSeenActive = false;
+  state.nativePlaybackLastSeconds = null;
+  state.nativePlaybackLastDuration = null;
+  state.nativePlaybackLastSavedSeconds = null;
+}
+
+async function saveNativeProgressSnapshot(movieId, seconds, durationSeconds) {
+  if (!Number.isSafeInteger(Number(movieId)) || !Number.isFinite(Number(seconds))) return;
+  const safeSeconds = Math.max(0, Number(seconds));
+  const safeDuration = Number.isFinite(Number(durationSeconds)) ? Math.max(0, Number(durationSeconds)) : 0;
+  try {
+    const payload = await window.BaiaPage.apiRequest(`/api/movies/${movieId}/progress`, {
+      method: 'PUT',
+      body: JSON.stringify({ seconds: safeSeconds, durationSeconds: safeDuration }),
+    });
+    const updated = {
+      progressSeconds: payload.progress.seconds,
+      durationSeconds: payload.progress.durationSeconds,
+      completed: payload.progress.completed,
+      lastWatchedAt: new Date().toISOString(),
+    };
+    updateMovieEverywhere({ id: Number(movieId), ...updated });
+    if (state.activeMovie?.id === Number(movieId)) Object.assign(state.activeMovie, updated);
+    state.nativePlaybackLastSavedSeconds = payload.progress.seconds;
+  } catch (error) {
+    console.warn('Salvataggio progresso native player non riuscito.', error);
+  }
+}
+
+function startNativePlaybackMonitor(movie) {
+  clearNativePlaybackMonitor();
+  state.nativePlaybackMovieId = movie.id;
+  state.nativePlaybackLastSavedSeconds = Number.isFinite(Number(movie.progressSeconds))
+    ? Number(movie.progressSeconds)
+    : null;
+
+  let polling = false;
+  state.nativePlaybackTimer = window.setInterval(async () => {
+    if (polling || state.nativePlaybackMovieId !== movie.id) return;
+    polling = true;
+    try {
+      const playback = await window.BaiaApi.nativeVideoPlayerState();
+      const seconds = Number(playback?.timePos);
+      const duration = Number(playback?.duration);
+      const nativeVolume = Number(playback?.volume);
+      if (Number.isFinite(nativeVolume)) persistPlayerSetting(PLAYER_VOLUME_STORAGE_KEY, Math.round(nativeVolume));
+      if (playback?.active && !playback?.idle) {
+        state.nativePlaybackSeenActive = true;
+        if (Number.isFinite(seconds)) state.nativePlaybackLastSeconds = seconds;
+        if (Number.isFinite(duration)) state.nativePlaybackLastDuration = duration;
+        const lastSaved = Number(state.nativePlaybackLastSavedSeconds);
+        if (Number.isFinite(seconds) && (!Number.isFinite(lastSaved) || Math.abs(seconds - lastSaved) >= PROGRESS_CHECKPOINT_SECONDS)) {
+          await saveNativeProgressSnapshot(movie.id, seconds, duration);
+        }
+        return;
+      }
+
+      if (state.nativePlaybackSeenActive && playback?.idle) {
+        const finalSeconds = Number.isFinite(state.nativePlaybackLastSeconds) ? state.nativePlaybackLastSeconds : 0;
+        const finalDuration = Number.isFinite(state.nativePlaybackLastDuration) ? state.nativePlaybackLastDuration : 0;
+        await saveNativeProgressSnapshot(movie.id, finalSeconds, finalDuration);
+        clearNativePlaybackMonitor();
+        updateDetailActions();
+      }
+    } catch (error) {
+      console.warn('Monitor native player non disponibile.', error);
+    } finally {
+      polling = false;
+    }
+  }, 1000);
+}
+
+function nativePlayerAccent() {
+  const value = getComputedStyle(document.documentElement).getPropertyValue('--film-accent').trim();
+  return /^#[0-9a-f]{6}$/i.test(value) ? value : '#7baf45';
+}
+
 function saveProgressOnPageExit() {
   const movie = state.activeMovie;
   const player = elements.videoPlayer;
@@ -1223,12 +1310,16 @@ async function startPlayback({ restart = false } = {}) {
   const movie = state.activeMovie;
   if (!movie) return;
 
-  // Fase 1 roadmap: quando il flag esplicito e attivo, il Core Rust apre
-  // lo stesso media in una finestra mpv esterna. Con flag false il flusso
-  // legacy WebView <video> qui sotto resta invariato.
-  const nativePoc = await window.BaiaApi.tryOpenNativeVideoPlayer(movie.id);
-  if (nativePoc.used) {
-    window.BaiaPage.shellToast('PoC mpv avviato in una finestra separata.');
+  const nativePlayback = await window.BaiaApi.tryOpenNativeVideoPlayer(movie.id, {
+    title: movie.title,
+    meta: movieMeta(movie),
+    accent: nativePlayerAccent(),
+    startSeconds: !restart && hasResumableProgress(movie) ? Number(movie.progressSeconds) : 0,
+    volume: readPlayerSetting(PLAYER_VOLUME_STORAGE_KEY, 100),
+  });
+  if (nativePlayback.used) {
+    resetProgressTracking(movie);
+    startNativePlaybackMonitor(movie);
     return;
   }
 

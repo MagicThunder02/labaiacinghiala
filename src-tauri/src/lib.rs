@@ -3,6 +3,7 @@ mod connector_tls;
 mod core;
 mod identity;
 mod media_bridge;
+mod native_media_source;
 mod native_player;
 mod native_upload;
 mod pairing;
