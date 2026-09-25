@@ -1994,6 +1994,43 @@ const PREMATURE_END_MAX_SAME_REGION_ATTEMPTS: u32 = 3;
 const PREMATURE_END_SAME_REGION_SECONDS: f64 = 2.0;
 const PREMATURE_END_RETRY_WINDOW: Duration = Duration::from_secs(20);
 const PREMATURE_END_STABLE_ADVANCE_SECONDS: f64 = 5.0;
+// Phase 6B.7.3.4: gli ultimi cinque minuti usano seek assoluti precisi. Il log
+// 6B.7.3.3 ha mostrato un EOF prematuro mentre mpv era ancora in `seeking=true`
+// dopo un seek keyframe vicino alla fine fisica del file.
+const SEEK_END_EXACT_WINDOW_SECONDS: f64 = 5.0 * 60.0;
+const SEEK_COALESCE_SETTLE_DELAY: Duration = Duration::from_millis(150);
+// Il caso riprodotto in 6B.7.3.3 e arrivato a 2062ms: tre secondi evitano di
+// perdere per pochi millisecondi una correlazione altrimenti evidente.
+const END_FILE_SEEK_CORRELATION_WINDOW: Duration = Duration::from_secs(3);
+
+#[derive(Clone)]
+struct UserSeekProbe {
+    id: u64,
+    issued_at: Instant,
+    origin: &'static str,
+    requested: f64,
+    target_seconds: Option<f64>,
+    mode: &'static str,
+    seeking_before: bool,
+    time_pos_before: Option<f64>,
+    duration: Option<f64>,
+    source_seeks_before: u64,
+    source_remote_requests_before: u64,
+    source_bytes_received_before: u64,
+    source_generation_before: u64,
+    source_last_seek_offset_before: u64,
+    source_last_read_position_before: u64,
+    source_last_read_remaining_before: u64,
+    source_size: u64,
+}
+
+#[derive(Clone)]
+struct PendingSurfaceSeek {
+    target_seconds: f64,
+    input_count: u32,
+    queued_at: Instant,
+}
+
 type MpvStreamCbAddRo = unsafe extern "C" fn(
     *mut c_void,
     *const c_char,
@@ -2165,6 +2202,104 @@ fn end_file_is_premature(reason: i32, state: &NativePlaybackState) -> bool {
     matches!(reason, MPV_END_FILE_REASON_EOF | MPV_END_FILE_REASON_ERROR)
         && remaining_playback_seconds(state)
             .is_some_and(|remaining| remaining > PREMATURE_END_NEAR_END_SECONDS)
+}
+
+fn clamp_seek_target(target: f64, duration: Option<f64>) -> f64 {
+    let mut target = target.max(0.0);
+    if let Some(duration) = duration.filter(|value| value.is_finite() && *value > 0.0) {
+        target = target.min(duration);
+    }
+    target
+}
+
+fn seek_target_is_near_end(target: f64, duration: Option<f64>) -> bool {
+    duration
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .is_some_and(|duration| {
+            let remaining = (duration - target).max(0.0);
+            remaining <= SEEK_END_EXACT_WINDOW_SECONDS
+        })
+}
+
+fn absolute_seek_mode(target: f64, duration: Option<f64>) -> &'static str {
+    if seek_target_is_near_end(target, duration) {
+        "absolute+exact"
+    } else {
+        "absolute+keyframes"
+    }
+}
+
+fn playback_state_snapshot(
+    last_playback_state: &Mutex<NativePlaybackState>,
+) -> NativePlaybackState {
+    last_playback_state
+        .lock()
+        .map(|state| state.clone())
+        .unwrap_or_default()
+}
+
+fn build_user_seek_probe(
+    id: u64,
+    origin: &'static str,
+    requested: f64,
+    target_seconds: Option<f64>,
+    mode: &'static str,
+    registry: &NativeMediaSourceRegistry,
+    last_playback_state: &Mutex<NativePlaybackState>,
+) -> UserSeekProbe {
+    let state = playback_state_snapshot(last_playback_state);
+    let source = registry.current_stats();
+    UserSeekProbe {
+        id,
+        issued_at: Instant::now(),
+        origin,
+        requested,
+        target_seconds,
+        mode,
+        seeking_before: state.seeking,
+        time_pos_before: state.time_pos,
+        duration: state.duration,
+        source_seeks_before: source.as_ref().map_or(0, |stats| stats.seeks),
+        source_remote_requests_before: source
+            .as_ref()
+            .map_or(0, |stats| stats.remote_requests),
+        source_bytes_received_before: source
+            .as_ref()
+            .map_or(0, |stats| stats.bytes_received),
+        source_generation_before: source.as_ref().map_or(0, |stats| stats.generation),
+        source_last_seek_offset_before: source
+            .as_ref()
+            .map_or(0, |stats| stats.last_seek_offset),
+        source_last_read_position_before: source
+            .as_ref()
+            .map_or(0, |stats| stats.last_read_position),
+        source_last_read_remaining_before: source
+            .as_ref()
+            .map_or(0, |stats| stats.last_read_remaining),
+        source_size: source.as_ref().map_or(0, |stats| stats.source_size),
+    }
+}
+
+fn log_user_seek_probe(probe: &UserSeekProbe) {
+    diagnostic_log(format!(
+        "native_player seek_probe=start id={} origin={} requested={:.3} target_seconds={:?} mode={} seeking_before={} time_pos_before={:?} duration={:?} source_seeks_before={} source_remote_requests_before={} source_bytes_received_before={} source_generation_before={} source_last_seek_offset_before={} source_last_read_position_before={} source_last_read_remaining_before={} source_size={}",
+        probe.id,
+        probe.origin,
+        probe.requested,
+        probe.target_seconds,
+        probe.mode,
+        probe.seeking_before,
+        probe.time_pos_before,
+        probe.duration,
+        probe.source_seeks_before,
+        probe.source_remote_requests_before,
+        probe.source_bytes_received_before,
+        probe.source_generation_before,
+        probe.source_last_seek_offset_before,
+        probe.source_last_read_position_before,
+        probe.source_last_read_remaining_before,
+        probe.source_size,
+    ));
 }
 
 fn recover_premature_end_file(
@@ -3198,6 +3333,18 @@ fn player_worker(
     let mut premature_end_last_position: Option<f64> = None;
     let mut premature_end_last_at: Option<Instant> = None;
     let mut premature_end_recovery_started: Option<Instant> = None;
+    let mut user_seek_sequence: u64 = 0;
+    let mut user_seek_commands: u64 = 0;
+    let mut end_file_seek_correlations: u64 = 0;
+    let mut premature_end_seek_correlations: u64 = 0;
+    let mut last_user_seek_probe: Option<UserSeekProbe> = None;
+    let mut exact_end_seek_commands: u64 = 0;
+    let mut coalesced_seek_inputs: u64 = 0;
+    let mut coalesced_seek_dispatches: u64 = 0;
+    let mut surface_seek_in_flight = false;
+    let mut surface_seek_dispatched_at: Option<Instant> = None;
+    let mut last_surface_seek_target: Option<f64> = None;
+    let mut pending_surface_seek: Option<PendingSurfaceSeek> = None;
 
     while running {
         match receiver.recv_timeout(EVENT_POLL_INTERVAL) {
@@ -3220,6 +3367,18 @@ fn player_worker(
                     premature_end_last_position = None;
                     premature_end_last_at = None;
                     premature_end_recovery_started = None;
+                    user_seek_sequence = 0;
+                    user_seek_commands = 0;
+                    end_file_seek_correlations = 0;
+                    premature_end_seek_correlations = 0;
+                    last_user_seek_probe = None;
+                    exact_end_seek_commands = 0;
+                    coalesced_seek_inputs = 0;
+                    coalesced_seek_dispatches = 0;
+                    surface_seek_in_flight = false;
+                    surface_seek_dispatched_at = None;
+                    last_surface_seek_target = None;
+                    pending_surface_seek = None;
                     let intro_started = Instant::now();
                     let intro_visual_started = intro_started + PLAYBACK_INTRO_AUDIO_LEAD;
                     playback_intro_started = Some(intro_started);
@@ -3333,23 +3492,61 @@ fn player_worker(
                     let _ = response.send(result);
                 }
                 PlayerCommand::Seek { seconds, response } => {
-                    let result = if seconds.is_finite() && seconds >= 0.0 {
+                    let seek_state = playback_state_snapshot(&last_playback_state);
+                    let target = if seconds.is_finite() && seconds >= 0.0 {
+                        Some(clamp_seek_target(seconds, seek_state.duration))
+                    } else {
+                        None
+                    };
+                    let mode = target
+                        .map(|target| absolute_seek_mode(target, seek_state.duration))
+                        .unwrap_or("absolute+keyframes");
+                    let probe = if let Some(target) = target {
+                        user_seek_sequence = user_seek_sequence.saturating_add(1);
+                        let probe = build_user_seek_probe(
+                            user_seek_sequence,
+                            "command_absolute",
+                            seconds,
+                            Some(target),
+                            mode,
+                            &registry,
+                            &last_playback_state,
+                        );
+                        log_user_seek_probe(&probe);
+                        Some(probe)
+                    } else {
+                        None
+                    };
+                    let result = if let Some(target) = target {
                         api.command(
                             handle,
                             &[
                                 "seek".to_string(),
-                                format!("{seconds:.3}"),
-                                "absolute+keyframes".to_string(),
+                                format!("{target:.3}"),
+                                mode.to_string(),
                             ],
                         )
                     } else {
                         Err("Posizione seek non valida.".to_string())
                     };
                     if result.is_ok() {
+                        user_seek_commands = user_seek_commands.saturating_add(1);
+                        if mode == "absolute+exact" {
+                            exact_end_seek_commands = exact_end_seek_commands.saturating_add(1);
+                        }
+                        last_user_seek_probe = probe;
+                        surface_seek_in_flight = true;
+                        surface_seek_dispatched_at = Some(Instant::now());
+                        last_surface_seek_target = target;
                         render_shared.update(|ui| {
-                            ui.time_pos = seconds.max(0.0);
+                            ui.time_pos = target.unwrap_or(seconds.max(0.0));
                             ui.seek_preview = None;
                         });
+                    } else if let Some(probe) = probe.as_ref() {
+                        diagnostic_log(format!(
+                            "native_player seek_probe=command_error id={} origin={} requested={:.3}",
+                            probe.id, probe.origin, probe.requested
+                        ));
                     }
                     let _ = response.send(result);
                 }
@@ -3365,6 +3562,10 @@ fn player_worker(
                     let _ = response.send(result);
                 }
                 PlayerCommand::Stop { response } => {
+                    pending_surface_seek = None;
+                    surface_seek_in_flight = false;
+                    surface_seek_dispatched_at = None;
+                    last_surface_seek_target = None;
                     let _ = capture_playback_state(
                         &api,
                         handle,
@@ -3376,6 +3577,10 @@ fn player_worker(
                     let _ = response.send(result);
                 }
                 PlayerCommand::Shutdown => {
+                    pending_surface_seek = None;
+                    surface_seek_in_flight = false;
+                    surface_seek_dispatched_at = None;
+                    last_surface_seek_target = None;
                     let _ = capture_playback_state(
                         &api,
                         handle,
@@ -3412,37 +3617,186 @@ fn player_worker(
                 }
                 SurfaceAction::SeekAbsolute(seconds) => {
                     if seconds.is_finite() && seconds >= 0.0 {
+                        let state = playback_state_snapshot(&last_playback_state);
+                        let target = clamp_seek_target(seconds, state.duration);
+                        let seek_busy = surface_seek_in_flight
+                            || state.seeking
+                            || premature_end_recovery_started.is_some();
+                        if seek_busy {
+                            let input_count = pending_surface_seek
+                                .as_ref()
+                                .map_or(1, |pending| pending.input_count.saturating_add(1));
+                            let queued_at = pending_surface_seek
+                                .as_ref()
+                                .map_or_else(Instant::now, |pending| pending.queued_at);
+                            pending_surface_seek = Some(PendingSurfaceSeek {
+                                target_seconds: target,
+                                input_count,
+                                queued_at,
+                            });
+                            coalesced_seek_inputs = coalesced_seek_inputs.saturating_add(1);
+                            last_surface_seek_target = Some(target);
+                            render_shared.update(|ui| {
+                                ui.time_pos = target;
+                                ui.seek_preview = None;
+                            });
+                            diagnostic_log(format!(
+                                "native_player seek_coalesce=queued origin=surface_absolute requested={seconds:.3} target_seconds={target:.3} queued_inputs={} seeking_before={} recovery_active={} mode={}",
+                                input_count,
+                                state.seeking,
+                                premature_end_recovery_started.is_some(),
+                                absolute_seek_mode(target, state.duration),
+                            ));
+                            continue;
+                        }
+
+                        let mode = absolute_seek_mode(target, state.duration);
+                        user_seek_sequence = user_seek_sequence.saturating_add(1);
+                        let probe = build_user_seek_probe(
+                            user_seek_sequence,
+                            "surface_absolute",
+                            seconds,
+                            Some(target),
+                            mode,
+                            &registry,
+                            &last_playback_state,
+                        );
+                        log_user_seek_probe(&probe);
                         let result = api.command(
                             handle,
                             &[
                                 "seek".to_string(),
-                                format!("{seconds:.3}"),
-                                "absolute+keyframes".to_string(),
+                                format!("{target:.3}"),
+                                mode.to_string(),
                             ],
                         );
                         if result.is_ok() {
+                            user_seek_commands = user_seek_commands.saturating_add(1);
+                            if mode == "absolute+exact" {
+                                exact_end_seek_commands = exact_end_seek_commands.saturating_add(1);
+                            }
+                            last_user_seek_probe = Some(probe);
+                            surface_seek_in_flight = true;
+                            surface_seek_dispatched_at = Some(Instant::now());
+                            last_surface_seek_target = Some(target);
                             render_shared.update(|ui| {
-                                ui.time_pos = seconds;
+                                ui.time_pos = target;
                                 ui.seek_preview = None;
                             });
                             diagnostic_log(format!(
-                                "native_player ui_action=seek seconds={seconds:.3}"
+                                "native_player ui_action=seek seconds={target:.3} mode={mode}"
+                            ));
+                        } else {
+                            diagnostic_log(format!(
+                                "native_player seek_probe=command_error id={} origin={} requested={:.3}",
+                                probe.id, probe.origin, probe.requested
                             ));
                         }
                     }
                 }
                 SurfaceAction::SeekRelative(delta) => {
-                    let result = api.command(
-                        handle,
-                        &[
-                            "seek".to_string(),
-                            format!("{delta:.3}"),
-                            "relative+keyframes".to_string(),
-                        ],
+                    let state = playback_state_snapshot(&last_playback_state);
+                    let seek_busy = surface_seek_in_flight
+                        || state.seeking
+                        || premature_end_recovery_started.is_some();
+                    let base = if seek_busy {
+                        pending_surface_seek
+                            .as_ref()
+                            .map(|pending| pending.target_seconds)
+                            .or(last_surface_seek_target)
+                            .or(state.time_pos)
+                    } else {
+                        state.time_pos
+                    };
+                    let target = base.map(|base| {
+                        clamp_seek_target(base + delta, state.duration)
+                    });
+
+                    if seek_busy {
+                        if let Some(target) = target {
+                            let input_count = pending_surface_seek
+                                .as_ref()
+                                .map_or(1, |pending| pending.input_count.saturating_add(1));
+                            let queued_at = pending_surface_seek
+                                .as_ref()
+                                .map_or_else(Instant::now, |pending| pending.queued_at);
+                            pending_surface_seek = Some(PendingSurfaceSeek {
+                                target_seconds: target,
+                                input_count,
+                                queued_at,
+                            });
+                            coalesced_seek_inputs = coalesced_seek_inputs.saturating_add(1);
+                            last_surface_seek_target = Some(target);
+                            diagnostic_log(format!(
+                                "native_player seek_coalesce=queued origin=surface_relative requested={delta:.3} target_seconds={target:.3} queued_inputs={} seeking_before={} recovery_active={} mode={}",
+                                input_count,
+                                state.seeking,
+                                premature_end_recovery_started.is_some(),
+                                absolute_seek_mode(target, state.duration),
+                            ));
+                        } else {
+                            diagnostic_log(format!(
+                                "native_player seek_coalesce=drop origin=surface_relative requested={delta:.3} reason=target_unavailable"
+                            ));
+                        }
+                        continue;
+                    }
+
+                    let near_end_exact = target
+                        .is_some_and(|target| seek_target_is_near_end(target, state.duration));
+                    let mode = if near_end_exact {
+                        "absolute+exact"
+                    } else {
+                        "relative+keyframes"
+                    };
+                    user_seek_sequence = user_seek_sequence.saturating_add(1);
+                    let probe = build_user_seek_probe(
+                        user_seek_sequence,
+                        "surface_relative",
+                        delta,
+                        target,
+                        mode,
+                        &registry,
+                        &last_playback_state,
                     );
+                    log_user_seek_probe(&probe);
+                    let result = if near_end_exact {
+                        let target = target.expect("target exact seek disponibile");
+                        api.command(
+                            handle,
+                            &[
+                                "seek".to_string(),
+                                format!("{target:.3}"),
+                                "absolute+exact".to_string(),
+                            ],
+                        )
+                    } else {
+                        api.command(
+                            handle,
+                            &[
+                                "seek".to_string(),
+                                format!("{delta:.3}"),
+                                "relative+keyframes".to_string(),
+                            ],
+                        )
+                    };
                     if result.is_ok() {
+                        user_seek_commands = user_seek_commands.saturating_add(1);
+                        if near_end_exact {
+                            exact_end_seek_commands = exact_end_seek_commands.saturating_add(1);
+                        }
+                        last_user_seek_probe = Some(probe);
+                        surface_seek_in_flight = true;
+                        surface_seek_dispatched_at = Some(Instant::now());
+                        last_surface_seek_target = target;
                         diagnostic_log(format!(
-                            "native_player ui_action=seek_relative seconds={delta:.3}"
+                            "native_player ui_action=seek_relative seconds={delta:.3} target_seconds={:?} mode={mode}",
+                            target,
+                        ));
+                    } else {
+                        diagnostic_log(format!(
+                            "native_player seek_probe=command_error id={} origin={} requested={:.3}",
+                            probe.id, probe.origin, probe.requested
                         ));
                     }
                 }
@@ -3483,6 +3837,10 @@ fn player_worker(
                 }
                 SurfaceAction::RequestClose => {
                     let close_started = Instant::now();
+                    pending_surface_seek = None;
+                    surface_seek_in_flight = false;
+                    surface_seek_dispatched_at = None;
+                    last_surface_seek_target = None;
                     render_shared.update(|ui| ui.close_requested = true);
                     render_shared.shutdown.store(true, Ordering::Release);
                     ui_close_requested.store(true, Ordering::Release);
@@ -3593,6 +3951,7 @@ fn player_worker(
                 } else {
                     "none".to_string()
                 };
+                let premature_end = end_file_is_premature(end_reason, &cached_state);
 
                 diagnostic_log(format!(
                     "native_player event=end_file player_backend=libmpv ui={} reason={} reason_code={} error_code={} error_name={} time_pos={:?} duration={:?} remaining_seconds={:?} near_end={}",
@@ -3607,6 +3966,118 @@ fn player_worker(
                     near_end,
                 ));
 
+                if let Some(probe) = last_user_seek_probe.as_ref() {
+                    let elapsed_ms = probe
+                        .issued_at
+                        .elapsed()
+                        .as_millis()
+                        .min(u64::MAX as u128) as u64;
+                    let within_window = Duration::from_millis(elapsed_ms)
+                        <= END_FILE_SEEK_CORRELATION_WINDOW;
+                    let source_now = registry.current_stats();
+                    let source_seeks_at_end = source_now.as_ref().map_or(0, |stats| stats.seeks);
+                    let source_remote_requests_at_end = source_now
+                        .as_ref()
+                        .map_or(0, |stats| stats.remote_requests);
+                    let source_bytes_received_at_end = source_now
+                        .as_ref()
+                        .map_or(0, |stats| stats.bytes_received);
+                    let source_generation_at_end =
+                        source_now.as_ref().map_or(0, |stats| stats.generation);
+                    let source_last_seek_offset_at_end = source_now
+                        .as_ref()
+                        .map_or(0, |stats| stats.last_seek_offset);
+                    let source_last_seek_previous_at_end = source_now
+                        .as_ref()
+                        .map_or(0, |stats| stats.last_seek_previous_position);
+                    let source_last_read_position_at_end = source_now
+                        .as_ref()
+                        .map_or(0, |stats| stats.last_read_position);
+                    let source_last_read_remaining_at_end = source_now
+                        .as_ref()
+                        .map_or(0, |stats| stats.last_read_remaining);
+                    let source_size_at_end = source_now.as_ref().map_or(0, |stats| stats.source_size);
+                    let source_seek_delta =
+                        source_seeks_at_end.saturating_sub(probe.source_seeks_before);
+                    let source_remote_request_delta = source_remote_requests_at_end
+                        .saturating_sub(probe.source_remote_requests_before);
+                    let source_bytes_received_delta = source_bytes_received_at_end
+                        .saturating_sub(probe.source_bytes_received_before);
+                    let seek_trace = registry.current_seek_trace_after(probe.source_seeks_before);
+                    let trace_truncated = source_seek_delta > seek_trace.len() as u64;
+
+                    if within_window {
+                        end_file_seek_correlations = end_file_seek_correlations.saturating_add(1);
+                        if premature_end {
+                            premature_end_seek_correlations =
+                                premature_end_seek_correlations.saturating_add(1);
+                        }
+                    }
+
+                    diagnostic_log(format!(
+                        "native_player end_file_seek_correlation user_seek_id={} origin={} requested={:.3} target_seconds={:?} mode={} seeking_before={} elapsed_ms={} within_window={} window_ms={} premature={} time_pos_before={:?} time_pos_at_end={:?} duration={:?} seeking_at_end={} paused_for_cache={} cache_duration={:?} cache_speed={:?} source_seeks_before={} source_seeks_at_end={} source_seek_delta={} source_remote_requests_before={} source_remote_requests_at_end={} source_remote_request_delta={} source_bytes_received_before={} source_bytes_received_at_end={} source_bytes_received_delta={} source_generation_before={} source_generation_at_end={} source_last_seek_offset_before={} source_last_seek_offset_at_end={} source_last_seek_previous_at_end={} source_last_read_position_before={} source_last_read_position_at_end={} source_last_read_remaining_before={} source_last_read_remaining_at_end={} source_size_before={} source_size_at_end={} native_trace_count={} native_trace_truncated={}",
+                        probe.id,
+                        probe.origin,
+                        probe.requested,
+                        probe.target_seconds,
+                        probe.mode,
+                        probe.seeking_before,
+                        elapsed_ms,
+                        within_window,
+                        END_FILE_SEEK_CORRELATION_WINDOW.as_millis(),
+                        premature_end,
+                        probe.time_pos_before,
+                        cached_state.time_pos,
+                        cached_state.duration,
+                        cached_state.seeking,
+                        cached_state.paused_for_cache,
+                        cached_state.cache_duration,
+                        cached_state.cache_speed,
+                        probe.source_seeks_before,
+                        source_seeks_at_end,
+                        source_seek_delta,
+                        probe.source_remote_requests_before,
+                        source_remote_requests_at_end,
+                        source_remote_request_delta,
+                        probe.source_bytes_received_before,
+                        source_bytes_received_at_end,
+                        source_bytes_received_delta,
+                        probe.source_generation_before,
+                        source_generation_at_end,
+                        probe.source_last_seek_offset_before,
+                        source_last_seek_offset_at_end,
+                        source_last_seek_previous_at_end,
+                        probe.source_last_read_position_before,
+                        source_last_read_position_at_end,
+                        probe.source_last_read_remaining_before,
+                        source_last_read_remaining_at_end,
+                        probe.source_size,
+                        source_size_at_end,
+                        seek_trace.len(),
+                        trace_truncated,
+                    ));
+
+                    if within_window {
+                        for trace in seek_trace {
+                            diagnostic_log(format!(
+                                "native_player end_file_seek_trace user_seek_id={} native_seek_sequence={} offset={} previous_position={} distance={} remaining_bytes={} cache_hit={} eof_seek={} prefetch_match={} prefetch_invalidated={} generation_before={} generation_after={}",
+                                probe.id,
+                                trace.sequence,
+                                trace.offset,
+                                trace.previous_position,
+                                trace.distance,
+                                trace.remaining_bytes,
+                                trace.cache_hit,
+                                trace.eof_seek,
+                                trace.prefetch_match,
+                                trace.prefetch_invalidated,
+                                trace.generation_before,
+                                trace.generation_after,
+                            ));
+                        }
+                    }
+                }
+
                 if end_reason == MPV_END_FILE_REASON_REDIRECT {
                     pending_end_file = None;
                     diagnostic_log(
@@ -3615,7 +4086,7 @@ fn player_worker(
                     continue;
                 }
 
-                if end_file_is_premature(end_reason, &cached_state) {
+                if premature_end {
                     premature_end_files = premature_end_files.saturating_add(1);
                     let now = Instant::now();
                     let position = cached_state.time_pos.unwrap_or(0.0);
@@ -3646,6 +4117,9 @@ fn player_worker(
                                     end_file_recoveries = end_file_recoveries.saturating_add(1);
                                     premature_end_recovery_started = Some(Instant::now());
                                     pending_end_file = None;
+                                    surface_seek_in_flight = true;
+                                    surface_seek_dispatched_at = Some(Instant::now());
+                                    last_surface_seek_target = Some(recovery_position);
                                     if let Ok(mut snapshot) = last_playback_state.lock() {
                                         snapshot.active = true;
                                         snapshot.idle = false;
@@ -3713,6 +4187,9 @@ fn player_worker(
                     "native_player event=end_file action=wait_idle reason={} near_end={} recovery_attempts={}",
                     reason_name, near_end, premature_end_attempts
                 ));
+                pending_surface_seek = None;
+                surface_seek_in_flight = false;
+                surface_seek_dispatched_at = None;
                 pending_end_file = Some(Instant::now());
             }
             if event_id == MPV_EVENT_SHUTDOWN {
@@ -3841,6 +4318,74 @@ fn player_worker(
                     &last_playback_state,
                 );
                 update_render_state_from_snapshot(&snapshot, &render_shared);
+
+                if surface_seek_in_flight
+                    && !snapshot.seeking
+                    && premature_end_recovery_started.is_none()
+                    && surface_seek_dispatched_at.is_some_and(|started| {
+                        started.elapsed() >= SEEK_COALESCE_SETTLE_DELAY
+                    })
+                {
+                    if let Some(pending) = pending_surface_seek.take() {
+                        let target = clamp_seek_target(pending.target_seconds, snapshot.duration);
+                        let mode = absolute_seek_mode(target, snapshot.duration);
+                        user_seek_sequence = user_seek_sequence.saturating_add(1);
+                        let probe = build_user_seek_probe(
+                            user_seek_sequence,
+                            "surface_coalesced",
+                            target,
+                            Some(target),
+                            mode,
+                            &registry,
+                            &last_playback_state,
+                        );
+                        log_user_seek_probe(&probe);
+                        let result = api.command(
+                            handle,
+                            &[
+                                "seek".to_string(),
+                                format!("{target:.3}"),
+                                mode.to_string(),
+                            ],
+                        );
+                        match result {
+                            Ok(()) => {
+                                user_seek_commands = user_seek_commands.saturating_add(1);
+                                coalesced_seek_dispatches =
+                                    coalesced_seek_dispatches.saturating_add(1);
+                                if mode == "absolute+exact" {
+                                    exact_end_seek_commands =
+                                        exact_end_seek_commands.saturating_add(1);
+                                }
+                                last_user_seek_probe = Some(probe);
+                                surface_seek_dispatched_at = Some(Instant::now());
+                                last_surface_seek_target = Some(target);
+                                render_shared.update(|ui| {
+                                    ui.time_pos = target;
+                                    ui.seek_preview = None;
+                                });
+                                diagnostic_log(format!(
+                                    "native_player seek_coalesce=dispatch target_seconds={target:.3} queued_inputs={} queued_ms={} mode={mode}",
+                                    pending.input_count,
+                                    pending.queued_at.elapsed().as_millis(),
+                                ));
+                            }
+                            Err(error) => {
+                                surface_seek_in_flight = false;
+                                surface_seek_dispatched_at = None;
+                                last_surface_seek_target = None;
+                                diagnostic_log(format!(
+                                    "native_player seek_coalesce=dispatch_error target_seconds={target:.3} queued_inputs={} mode={mode} error={error}",
+                                    pending.input_count,
+                                ));
+                            }
+                        }
+                    } else {
+                        surface_seek_in_flight = false;
+                        surface_seek_dispatched_at = None;
+                        last_surface_seek_target = None;
+                    }
+                }
 
                 if premature_end_attempts > 0 && !snapshot.idle {
                     if let (Some(recovery_position), Some(current_position)) =
@@ -3982,7 +4527,7 @@ fn player_worker(
             0.0
         };
         diagnostic_log(format!(
-            "native_player transport_summary remote_requests={} bytes_requested={} bytes_received={} bytes_served={} useful_ratio={:.3} cache_hits={} cache_misses={} cache_seek_hits={} seek_cache_misses={} seeks={} generation={} metadata_ms={} first_range_headers_ms={} first_range_body_ms={} first_range_elapsed_ms={} avg_headers_ms={:.1} avg_body_ms={:.1} avg_range_ms={:.1} max_range_ms={} blocking_fetches={} avg_blocking_fetch_ms={:.1} blocking_fetch_ms_total={} blocking_fetch_ms_max={} slow_250={} slow_500={} slow_1000={} seek_distance_bytes_total={} seek_distance_bytes_max={} max_range_bytes={} window_bytes={} reservoir_low_bytes={} reservoir_high_bytes={} reservoir_depth_bytes={} reservoir_depth_peak_bytes={} cache_peak_bytes={} cache_segments={} cache_peak_segments={} cache_evictions={} cache_evicted_bytes={} cache_preserved_miss_bytes={} cache_preserved_miss_segments={} prefetch_requests={} prefetch_hits={} prefetch_waits={} prefetch_wait_ms_total={} prefetch_wait_ms_max={} prefetch_wait_extensions={} prefetch_fallbacks={} prefetch_fallback_stalled={} prefetch_fallback_hard={} prefetch_cancelled={} prefetch_stale_results={} prefetch_errors={} prefetch_bytes_discarded={} reservoir_refills={} reservoir_ranges_scheduled={} reservoir_ranges_completed={} reservoir_bytes_completed={} read_calls={} true_eof_reads={} non_eof_zero_reads_prevented={} non_eof_zero_read_failures={} last_non_eof_zero_position={} last_non_eof_zero_remaining={} last_non_eof_zero_generation={} last_read_position={} last_read_requested={} last_read_returned={} last_read_remaining={} source_size={} seek_to_eof_count={} last_seek_offset={} last_seek_previous_position={} premature_end_files={} end_file_recoveries={} end_file_recovery_failures={} cache_pause_count={} cache_pause_total_ms={} cache_pause_max_ms={}",
+            "native_player transport_summary remote_requests={} bytes_requested={} bytes_received={} bytes_served={} useful_ratio={:.3} cache_hits={} cache_misses={} cache_seek_hits={} seek_cache_misses={} seeks={} generation={} metadata_ms={} first_range_headers_ms={} first_range_body_ms={} first_range_elapsed_ms={} avg_headers_ms={:.1} avg_body_ms={:.1} avg_range_ms={:.1} max_range_ms={} blocking_fetches={} avg_blocking_fetch_ms={:.1} blocking_fetch_ms_total={} blocking_fetch_ms_max={} slow_250={} slow_500={} slow_1000={} seek_distance_bytes_total={} seek_distance_bytes_max={} max_range_bytes={} window_bytes={} reservoir_low_bytes={} reservoir_high_bytes={} reservoir_depth_bytes={} reservoir_depth_peak_bytes={} cache_peak_bytes={} cache_segments={} cache_peak_segments={} cache_evictions={} cache_evicted_bytes={} cache_preserved_miss_bytes={} cache_preserved_miss_segments={} prefetch_requests={} prefetch_hits={} prefetch_waits={} prefetch_wait_ms_total={} prefetch_wait_ms_max={} prefetch_wait_extensions={} prefetch_fallbacks={} prefetch_fallback_stalled={} prefetch_fallback_hard={} prefetch_cancelled={} prefetch_stale_results={} prefetch_errors={} prefetch_bytes_discarded={} reservoir_refills={} reservoir_ranges_scheduled={} reservoir_ranges_completed={} reservoir_bytes_completed={} read_calls={} true_eof_reads={} non_eof_zero_reads_prevented={} non_eof_zero_read_failures={} last_non_eof_zero_position={} last_non_eof_zero_remaining={} last_non_eof_zero_generation={} last_read_position={} last_read_requested={} last_read_returned={} last_read_remaining={} source_size={} seek_to_eof_count={} last_seek_offset={} last_seek_previous_position={} premature_end_files={} end_file_recoveries={} end_file_recovery_failures={} user_seek_commands={} exact_end_seek_commands={} coalesced_seek_inputs={} coalesced_seek_dispatches={} end_file_seek_correlations={} premature_end_seek_correlations={} cache_pause_count={} cache_pause_total_ms={} cache_pause_max_ms={}",
             stats.remote_requests,
             stats.bytes_requested,
             stats.bytes_received,
@@ -4059,6 +4604,12 @@ fn player_worker(
             premature_end_files,
             end_file_recoveries,
             end_file_recovery_failures,
+            user_seek_commands,
+            exact_end_seek_commands,
+            coalesced_seek_inputs,
+            coalesced_seek_dispatches,
+            end_file_seek_correlations,
+            premature_end_seek_correlations,
             cache_pause_count,
             cache_pause_total_ms,
             cache_pause_max_ms,

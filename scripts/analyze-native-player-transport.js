@@ -35,6 +35,16 @@ function analyze(file) {
   let teardownMs = null;
   let slowOperations = 0;
   let maxSlowOperationMs = 0;
+  let seekCorrelationEvents = 0;
+  let prematureSeekCorrelationEvents = 0;
+  let lastSeekCorrelationMs = null;
+  let lastSeekCorrelationDelta = null;
+  let lastSeekCorrelationRemoteRequestDelta = null;
+  let lastSeekCorrelationReceivedMiB = null;
+  let lastSeekCorrelationTraceCount = null;
+  let lastSeekCorrelationMode = null;
+  let lastSeekCorrelationSeekingBefore = null;
+  let lastSeekCorrelationSeekingAtEnd = null;
 
   for (const line of lines) {
     if (line.includes('native_player transport_summary ')) summary = kv(line);
@@ -50,6 +60,22 @@ function analyze(file) {
     if (line.includes('native_player latency=slow ')) {
       slowOperations += 1;
       maxSlowOperationMs = Math.max(maxSlowOperationMs, num(kv(line).elapsed_ms) || 0);
+    }
+    if (line.includes('native_player end_file_seek_correlation ')) {
+      const values = kv(line);
+      if (values.within_window === 'true') {
+        seekCorrelationEvents += 1;
+        if (values.premature === 'true') prematureSeekCorrelationEvents += 1;
+      }
+      lastSeekCorrelationMs = num(values.elapsed_ms);
+      lastSeekCorrelationDelta = num(values.source_seek_delta);
+      lastSeekCorrelationRemoteRequestDelta = num(values.source_remote_request_delta);
+      const receivedDelta = num(values.source_bytes_received_delta);
+      lastSeekCorrelationReceivedMiB = receivedDelta == null ? null : receivedDelta / 1048576;
+      lastSeekCorrelationTraceCount = num(values.native_trace_count);
+      lastSeekCorrelationMode = values.mode ?? null;
+      lastSeekCorrelationSeekingBefore = values.seeking_before ?? null;
+      lastSeekCorrelationSeekingAtEnd = values.seeking_at_end ?? null;
     }
   }
 
@@ -137,6 +163,20 @@ function analyze(file) {
     prematureEndFiles: num(summary.premature_end_files),
     endFileRecoveries: num(summary.end_file_recoveries),
     endFileRecoveryFailures: num(summary.end_file_recovery_failures),
+    userSeekCommands: num(summary.user_seek_commands),
+    exactEndSeekCommands: num(summary.exact_end_seek_commands),
+    coalescedSeekInputs: num(summary.coalesced_seek_inputs),
+    coalescedSeekDispatches: num(summary.coalesced_seek_dispatches),
+    endFileSeekCorrelations: num(summary.end_file_seek_correlations) ?? seekCorrelationEvents,
+    prematureEndSeekCorrelations: num(summary.premature_end_seek_correlations) ?? prematureSeekCorrelationEvents,
+    lastSeekCorrelationMs,
+    lastSeekCorrelationDelta,
+    lastSeekCorrelationRemoteRequestDelta,
+    lastSeekCorrelationReceivedMiB,
+    lastSeekCorrelationTraceCount,
+    lastSeekCorrelationMode,
+    lastSeekCorrelationSeekingBefore,
+    lastSeekCorrelationSeekingAtEnd,
     slow250: num(summary.slow_250),
     slow500: num(summary.slow_500),
     slow1000: num(summary.slow_1000),
@@ -178,7 +218,7 @@ for (const file of files) {
 if (!rows.length) process.exit(process.exitCode || 1);
 
 for (const row of rows) {
-  for (const key of ['maxRangeMiB', 'windowMiB', 'reservoirLowMiB', 'reservoirHighMiB', 'reservoirDepthMiB', 'reservoirDepthPeakMiB', 'reservoirCompletedMiB', 'receivedMiB', 'servedMiB', 'cachePeakMiB', 'cacheEvictedMiB', 'cachePreservedMissMiB', 'maxSeekMiB', 'prefetchDiscardedMiB', 'lastNonEofZeroPositionMiB', 'lastNonEofZeroRemainingMiB', 'lastReadPositionMiB', 'lastReadRemainingMiB', 'lastReadRequestedKiB', 'lastReadReturnedKiB', 'sourceSizeMiB', 'lastSeekOffsetMiB', 'lastSeekPreviousMiB']) {
+  for (const key of ['maxRangeMiB', 'windowMiB', 'reservoirLowMiB', 'reservoirHighMiB', 'reservoirDepthMiB', 'reservoirDepthPeakMiB', 'reservoirCompletedMiB', 'receivedMiB', 'servedMiB', 'cachePeakMiB', 'cacheEvictedMiB', 'cachePreservedMissMiB', 'maxSeekMiB', 'prefetchDiscardedMiB', 'lastNonEofZeroPositionMiB', 'lastNonEofZeroRemainingMiB', 'lastReadPositionMiB', 'lastReadRemainingMiB', 'lastReadRequestedKiB', 'lastReadReturnedKiB', 'sourceSizeMiB', 'lastSeekOffsetMiB', 'lastSeekPreviousMiB', 'lastSeekCorrelationReceivedMiB']) {
     if (typeof row[key] === 'number') row[key] = Number(row[key].toFixed(2));
   }
 }
@@ -193,5 +233,5 @@ if (csv) {
   for (const row of rows) console.log(columns.map((column) => esc(row[column])).join(','));
 } else {
   console.table(rows);
-  console.log('\nLettura rapida: 6B.7.3.2 mantiene sparse cache + reservoir + recovery END_FILE e aggiunge un guard nel read callback: un read da 0 byte e consentito solo al vero EOF. Guarda nonEofZeroReadsPrevented/nonEofZeroReadFailures, trueEofReads, seekToEofCount e lastNonEofZeroPositionMiB per distinguere un falso EOF della sorgente da un EOF reale o da un seek esplicito alla fine del file.');
+  console.log('\nLettura rapida: 6B.7.3.4 mantiene invariati sparse cache, reservoir, EOF hardening e recovery. Guarda exactEndSeekCommands e coalescedSeekInputs/Dispatches per il nuovo hardening seek; in caso di END_FILE usa anche lastSeekCorrelationMode/SeekingBefore/SeekingAtEnd e i campi di correlazione 6B.7.3.3.');
 }

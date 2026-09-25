@@ -591,3 +591,66 @@ test('Phase 6B.7.3.2 impedisce EOF sintetici prima della size reale', () => {
   assert.match(analyzer, /lastSeekOffsetMiB/);
 });
 
+
+
+test('Phase 6B.7.3.3 correla seek utente, seek byte-level del demuxer e END_FILE', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+  const nativeSource = read('src-tauri/src/native_media_source.rs');
+  const analyzer = read('scripts/analyze-native-player-transport.js');
+
+  assert.match(nativePlayer, /END_FILE_SEEK_CORRELATION_WINDOW: Duration = Duration::from_secs\(3\)/);
+  assert.match(nativePlayer, /struct UserSeekProbe/);
+  assert.match(nativePlayer, /seek_probe=start/);
+  assert.match(nativePlayer, /end_file_seek_correlation/);
+  assert.match(nativePlayer, /end_file_seek_trace/);
+  assert.match(nativePlayer, /source_seek_delta=\{\}/);
+  assert.match(nativePlayer, /user_seek_commands=\{\}/);
+  assert.match(nativePlayer, /end_file_seek_correlations=\{\}/);
+  assert.match(nativePlayer, /premature_end_seek_correlations=\{\}/);
+  assert.match(nativePlayer, /relative\+keyframes/);
+  assert.match(nativePlayer, /absolute\+keyframes/);
+
+  assert.match(nativeSource, /SEEK_TRACE_CAPACITY: usize = 32/);
+  assert.match(nativeSource, /struct NativeMediaSeekTrace/);
+  assert.match(nativeSource, /fn record_seek_trace/);
+  assert.match(nativeSource, /fn seek_trace_after/);
+  assert.match(nativeSource, /current_seek_trace_after/);
+  assert.match(nativeSource, /native_media_source event=seek offset=\{\} cache_hit=\{\} generation=\{\} next_range_bytes=\{\} sequence=\{\}/);
+  assert.match(nativeSource, /prefetch_invalidated/);
+  assert.match(nativeSource, /generation_before/);
+  assert.match(nativeSource, /generation_after/);
+
+  assert.match(analyzer, /endFileSeekCorrelations/);
+  assert.match(analyzer, /prematureEndSeekCorrelations/);
+  assert.match(analyzer, /lastSeekCorrelationMs/);
+  assert.match(analyzer, /lastSeekCorrelationDelta/);
+  assert.match(analyzer, /lastSeekCorrelationRemoteRequestDelta/);
+  assert.match(analyzer, /lastSeekCorrelationReceivedMiB/);
+  assert.match(analyzer, /lastSeekCorrelationTraceCount/);
+});
+
+test('Phase 6B.7.3.4 usa seek exact vicino alla fine e coalescing durante seeking', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+  const analyzer = read('scripts/analyze-native-player-transport.js');
+
+  assert.match(nativePlayer, /SEEK_END_EXACT_WINDOW_SECONDS: f64 = 5\.0 \* 60\.0/);
+  assert.match(nativePlayer, /SEEK_COALESCE_SETTLE_DELAY: Duration = Duration::from_millis\(150\)/);
+  assert.match(nativePlayer, /fn seek_target_is_near_end/);
+  assert.match(nativePlayer, /fn absolute_seek_mode/);
+  assert.match(nativePlayer, /"absolute\+exact"/);
+  assert.match(nativePlayer, /"relative\+keyframes"/);
+  assert.match(nativePlayer, /struct PendingSurfaceSeek/);
+  assert.match(nativePlayer, /seek_coalesce=queued/);
+  assert.match(nativePlayer, /seek_coalesce=dispatch/);
+  assert.match(nativePlayer, /seeking_before=\{\}/);
+  assert.match(nativePlayer, /exact_end_seek_commands=\{\}/);
+  assert.match(nativePlayer, /coalesced_seek_inputs=\{\}/);
+  assert.match(nativePlayer, /coalesced_seek_dispatches=\{\}/);
+
+  assert.match(analyzer, /exactEndSeekCommands/);
+  assert.match(analyzer, /coalescedSeekInputs/);
+  assert.match(analyzer, /coalescedSeekDispatches/);
+  assert.match(analyzer, /lastSeekCorrelationMode/);
+  assert.match(analyzer, /lastSeekCorrelationSeekingBefore/);
+  assert.match(analyzer, /lastSeekCorrelationSeekingAtEnd/);
+});

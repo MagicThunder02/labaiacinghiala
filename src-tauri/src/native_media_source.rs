@@ -52,6 +52,9 @@ const PREFETCH_BODY_CHUNK_BYTES: usize = 64 * 1024;
 const DEFAULT_RESERVOIR_LOW_BYTES: usize = 8 * 1024 * 1024;
 const DEFAULT_RESERVOIR_HIGH_BYTES: usize = 12 * 1024 * 1024;
 const MAX_RESERVOIR_HIGH_BYTES: usize = 32 * 1024 * 1024;
+// Phase 6B.7.3.3: piccolo ring diagnostico degli ultimi seek byte-level
+// richiesti dal demuxer. Non cambia il comportamento del trasporto.
+const SEEK_TRACE_CAPACITY: usize = 32;
 
 // Manteniamo il nome Phase 3 per compatibilità con eventuali env già impostate:
 // ora rappresenta il CAP massimo del Range adattivo, non la dimensione fissa.
@@ -151,6 +154,21 @@ pub struct NativeMediaSourceStats {
     pub last_seek_previous_position: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct NativeMediaSeekTrace {
+    pub sequence: u64,
+    pub offset: u64,
+    pub previous_position: u64,
+    pub distance: u64,
+    pub remaining_bytes: u64,
+    pub cache_hit: bool,
+    pub eof_seek: bool,
+    pub prefetch_match: bool,
+    pub prefetch_invalidated: bool,
+    pub generation_before: u64,
+    pub generation_after: u64,
+}
+
 #[derive(Default)]
 struct NativeMediaSourceMetrics {
     remote_requests: AtomicU64,
@@ -232,10 +250,33 @@ struct NativeMediaSourceMetrics {
     seek_to_eof_count: AtomicU64,
     last_seek_offset: AtomicU64,
     last_seek_previous_position: AtomicU64,
+    recent_seek_trace: Mutex<VecDeque<NativeMediaSeekTrace>>,
     has_last_range: AtomicBool,
 }
 
 impl NativeMediaSourceMetrics {
+    fn record_seek_trace(&self, trace: NativeMediaSeekTrace) {
+        if let Ok(mut recent) = self.recent_seek_trace.lock() {
+            while recent.len() >= SEEK_TRACE_CAPACITY {
+                recent.pop_front();
+            }
+            recent.push_back(trace);
+        }
+    }
+
+    fn seek_trace_after(&self, sequence: u64) -> Vec<NativeMediaSeekTrace> {
+        self.recent_seek_trace
+            .lock()
+            .map(|recent| {
+                recent
+                    .iter()
+                    .filter(|trace| trace.sequence > sequence)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn snapshot(&self, max_range_bytes: usize, window_bytes: usize, reservoir_low_bytes: usize, reservoir_high_bytes: usize) -> NativeMediaSourceStats {
         let has_last_range = self.has_last_range.load(Ordering::Relaxed);
         NativeMediaSourceStats {
@@ -418,6 +459,10 @@ impl NativeMediaSourceTemplate {
             self.reservoir_low_bytes,
             self.reservoir_high_bytes,
         )
+    }
+
+    fn seek_trace_after(&self, sequence: u64) -> Vec<NativeMediaSeekTrace> {
+        self.metrics.seek_trace_after(sequence)
     }
 }
 
@@ -2177,6 +2222,7 @@ impl NativeMediaStream {
             previous_position - offset
         };
         let eof_seek = offset == self.size;
+        let generation_before = self.generation;
         self.template
             .metrics
             .last_seek_offset
@@ -2198,7 +2244,12 @@ impl NativeMediaStream {
             && offset == 0;
         let prefetch_match = !cache_hit && self.prefetch.expected_for(self.generation, offset);
         self.position = offset;
-        self.template.metrics.seeks.fetch_add(1, Ordering::Relaxed);
+        let seek_sequence = self
+            .template
+            .metrics
+            .seeks
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
         self.template
             .metrics
             .seek_distance_bytes_total
@@ -2262,13 +2313,35 @@ impl NativeMediaStream {
                 self.next_range_bytes(),
             );
         }
+        let prefetch_invalidated = !cache_hit && !eof_seek && !prefetch_match;
+        self.template.metrics.record_seek_trace(NativeMediaSeekTrace {
+            sequence: seek_sequence,
+            offset,
+            previous_position,
+            distance: seek_distance,
+            remaining_bytes: self.size.saturating_sub(offset),
+            cache_hit,
+            eof_seek,
+            prefetch_match,
+            prefetch_invalidated,
+            generation_before,
+            generation_after: self.generation,
+        });
         eprintln!(
-            "native_media_source event=seek offset={} cache_hit={} generation={} next_range_bytes={} prefetch_invalidated={} cache_policy=sparse_lru cache_resident_bytes={} cache_segments={}",
+            "native_media_source event=seek offset={} cache_hit={} generation={} next_range_bytes={} sequence={} previous_position={} seek_distance={} remaining_bytes={} generation_before={} generation_after={} prefetch_match={} prefetch_invalidated={} eof_seek={} cache_policy=sparse_lru cache_resident_bytes={} cache_segments={}",
             offset,
             cache_hit,
             self.generation,
             self.next_range_bytes(),
-            !cache_hit && !eof_seek && !prefetch_match,
+            seek_sequence,
+            previous_position,
+            seek_distance,
+            self.size.saturating_sub(offset),
+            generation_before,
+            self.generation,
+            prefetch_match,
+            prefetch_invalidated,
+            eof_seek,
             self.cache.resident_bytes(),
             self.cache.segment_count(),
         );
@@ -2328,6 +2401,19 @@ impl NativeMediaSourceRegistry {
         let token = self.current_token.lock().ok()?.clone()?;
         let sources = self.sources.lock().ok()?;
         sources.get(&token).map(NativeMediaSourceTemplate::stats)
+    }
+
+    pub fn current_seek_trace_after(&self, sequence: u64) -> Vec<NativeMediaSeekTrace> {
+        let Some(token) = self.current_token.lock().ok().and_then(|value| value.clone()) else {
+            return Vec::new();
+        };
+        let Ok(sources) = self.sources.lock() else {
+            return Vec::new();
+        };
+        sources
+            .get(&token)
+            .map(|source| source.seek_trace_after(sequence))
+            .unwrap_or_default()
     }
 
     fn template_for_uri(&self, uri: &str) -> Option<NativeMediaSourceTemplate> {
