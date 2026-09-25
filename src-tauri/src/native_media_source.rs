@@ -134,6 +134,21 @@ pub struct NativeMediaSourceStats {
     pub reservoir_ranges_scheduled: u64,
     pub reservoir_ranges_completed: u64,
     pub reservoir_bytes_completed: u64,
+    pub read_calls: u64,
+    pub true_eof_reads: u64,
+    pub non_eof_zero_reads_prevented: u64,
+    pub non_eof_zero_read_failures: u64,
+    pub last_non_eof_zero_position: u64,
+    pub last_non_eof_zero_remaining: u64,
+    pub last_non_eof_zero_generation: u64,
+    pub last_read_position: u64,
+    pub last_read_requested: u64,
+    pub last_read_returned: u64,
+    pub last_read_remaining: u64,
+    pub source_size: u64,
+    pub seek_to_eof_count: u64,
+    pub last_seek_offset: u64,
+    pub last_seek_previous_position: u64,
 }
 
 #[derive(Default)]
@@ -202,6 +217,21 @@ struct NativeMediaSourceMetrics {
     reservoir_ranges_scheduled: AtomicU64,
     reservoir_ranges_completed: AtomicU64,
     reservoir_bytes_completed: AtomicU64,
+    read_calls: AtomicU64,
+    true_eof_reads: AtomicU64,
+    non_eof_zero_reads_prevented: AtomicU64,
+    non_eof_zero_read_failures: AtomicU64,
+    last_non_eof_zero_position: AtomicU64,
+    last_non_eof_zero_remaining: AtomicU64,
+    last_non_eof_zero_generation: AtomicU64,
+    last_read_position: AtomicU64,
+    last_read_requested: AtomicU64,
+    last_read_returned: AtomicU64,
+    last_read_remaining: AtomicU64,
+    source_size: AtomicU64,
+    seek_to_eof_count: AtomicU64,
+    last_seek_offset: AtomicU64,
+    last_seek_previous_position: AtomicU64,
     has_last_range: AtomicBool,
 }
 
@@ -284,6 +314,33 @@ impl NativeMediaSourceMetrics {
             reservoir_ranges_scheduled: self.reservoir_ranges_scheduled.load(Ordering::Relaxed),
             reservoir_ranges_completed: self.reservoir_ranges_completed.load(Ordering::Relaxed),
             reservoir_bytes_completed: self.reservoir_bytes_completed.load(Ordering::Relaxed),
+            read_calls: self.read_calls.load(Ordering::Relaxed),
+            true_eof_reads: self.true_eof_reads.load(Ordering::Relaxed),
+            non_eof_zero_reads_prevented: self
+                .non_eof_zero_reads_prevented
+                .load(Ordering::Relaxed),
+            non_eof_zero_read_failures: self
+                .non_eof_zero_read_failures
+                .load(Ordering::Relaxed),
+            last_non_eof_zero_position: self
+                .last_non_eof_zero_position
+                .load(Ordering::Relaxed),
+            last_non_eof_zero_remaining: self
+                .last_non_eof_zero_remaining
+                .load(Ordering::Relaxed),
+            last_non_eof_zero_generation: self
+                .last_non_eof_zero_generation
+                .load(Ordering::Relaxed),
+            last_read_position: self.last_read_position.load(Ordering::Relaxed),
+            last_read_requested: self.last_read_requested.load(Ordering::Relaxed),
+            last_read_returned: self.last_read_returned.load(Ordering::Relaxed),
+            last_read_remaining: self.last_read_remaining.load(Ordering::Relaxed),
+            source_size: self.source_size.load(Ordering::Relaxed),
+            seek_to_eof_count: self.seek_to_eof_count.load(Ordering::Relaxed),
+            last_seek_offset: self.last_seek_offset.load(Ordering::Relaxed),
+            last_seek_previous_position: self
+                .last_seek_previous_position
+                .load(Ordering::Relaxed),
         }
     }
 }
@@ -1587,6 +1644,10 @@ impl NativeMediaStream {
         );
         template
             .metrics
+            .source_size
+            .store(metadata.size, Ordering::Relaxed);
+        template
+            .metrics
             .current_range_bytes
             .store(INITIAL_RANGE_BYTES as u64, Ordering::Relaxed);
         let prefetch = PrefetchCoordinator::new(
@@ -1945,10 +2006,98 @@ impl NativeMediaStream {
         Ok(true)
     }
 
+    fn record_read_result(&self, position: u64, requested: usize, returned: usize) {
+        self.template.metrics.read_calls.fetch_add(1, Ordering::Relaxed);
+        self.template
+            .metrics
+            .last_read_position
+            .store(position, Ordering::Relaxed);
+        self.template
+            .metrics
+            .last_read_requested
+            .store(requested as u64, Ordering::Relaxed);
+        self.template
+            .metrics
+            .last_read_returned
+            .store(returned as u64, Ordering::Relaxed);
+        self.template
+            .metrics
+            .last_read_remaining
+            .store(self.size.saturating_sub(position), Ordering::Relaxed);
+    }
+
+    fn force_non_eof_read_recovery(&mut self, position: u64) -> Result<(), String> {
+        self.template
+            .metrics
+            .non_eof_zero_reads_prevented
+            .fetch_add(1, Ordering::Relaxed);
+        self.template
+            .metrics
+            .last_non_eof_zero_position
+            .store(position, Ordering::Relaxed);
+        self.template
+            .metrics
+            .last_non_eof_zero_remaining
+            .store(self.size.saturating_sub(position), Ordering::Relaxed);
+        self.template
+            .metrics
+            .last_non_eof_zero_generation
+            .store(self.generation, Ordering::Relaxed);
+        let previous_generation = self.generation;
+        let resident_bytes = self.cache.resident_bytes();
+        let segments = self.cache.segment_count();
+        let reservoir_depth = self.current_forward_depth();
+        let had_pending_prefetch = self.prefetch.has_pending();
+
+        // Un read da 0 byte prima della size dichiarata sarebbe EOF per mpv.
+        // Non deve mai uscire dalla NativeMediaSource: invalidiamo la catena
+        // speculativa e forziamo un Range foreground sulla posizione corrente.
+        self.prefetch.invalidate();
+        self.generation = self.generation.saturating_add(1);
+        self.sequential_fetches = 1;
+        self.template
+            .metrics
+            .generation
+            .store(self.generation, Ordering::Release);
+        self.template
+            .metrics
+            .sequential_fetches
+            .store(self.sequential_fetches, Ordering::Relaxed);
+        self.template
+            .metrics
+            .current_range_bytes
+            .store(self.next_range_bytes() as u64, Ordering::Relaxed);
+
+        eprintln!(
+            "native_media_source event=non_eof_zero_read_prevented position={} size={} remaining={} previous_generation={} recovery_generation={} cache_resident_bytes={} cache_segments={} reservoir_depth_bytes={} had_pending_prefetch={} action=foreground_refill",
+            position,
+            self.size,
+            self.size.saturating_sub(position),
+            previous_generation,
+            self.generation,
+            resident_bytes,
+            segments,
+            reservoir_depth,
+            had_pending_prefetch,
+        );
+        self.fetch_foreground()
+    }
+
     fn read_into(&mut self, target: &mut [u8]) -> Result<usize, String> {
-        if target.is_empty() || self.position >= self.size {
+        if target.is_empty() {
             return Ok(0);
         }
+        if self.position >= self.size {
+            let position = self.position;
+            self.template
+                .metrics
+                .true_eof_reads
+                .fetch_add(1, Ordering::Relaxed);
+            self.record_read_result(position, target.len(), 0);
+            return Ok(0);
+        }
+
+        let read_position = self.position;
 
         // I risultati del worker possono contenere piu Range consecutivi: li
         // materializziamo nella sparse cache prima di decidere se il read deve
@@ -1981,12 +2130,34 @@ impl NativeMediaStream {
 
         let remaining = self.size.saturating_sub(self.position) as usize;
         let wanted = target.len().min(remaining);
-        let count = self.cache.read_into(self.position, &mut target[..wanted]);
+        let mut count = self.cache.read_into(self.position, &mut target[..wanted]);
+
+        if count == 0 && self.position < self.size {
+            let recovery_position = self.position;
+            self.force_non_eof_read_recovery(recovery_position)?;
+            count = self
+                .cache
+                .read_into(self.position, &mut target[..wanted]);
+            if count == 0 {
+                self.template
+                    .metrics
+                    .non_eof_zero_read_failures
+                    .fetch_add(1, Ordering::Relaxed);
+                self.template.metrics.errors.fetch_add(1, Ordering::Relaxed);
+                self.record_read_result(read_position, wanted, 0);
+                return Err(format!(
+                    "NativeMediaSource non puo restituire EOF a offset {recovery_position} prima della size {}.",
+                    self.size
+                ));
+            }
+        }
+
         self.position = self.position.saturating_add(count as u64);
         self.template
             .metrics
             .bytes_served
             .fetch_add(count as u64, Ordering::Relaxed);
+        self.record_read_result(read_position, wanted, count);
 
         self.harvest_prefetch_ready();
         self.ensure_forward_reservoir();
@@ -2006,6 +2177,20 @@ impl NativeMediaStream {
             previous_position - offset
         };
         let eof_seek = offset == self.size;
+        self.template
+            .metrics
+            .last_seek_offset
+            .store(offset, Ordering::Relaxed);
+        self.template
+            .metrics
+            .last_seek_previous_position
+            .store(previous_position, Ordering::Relaxed);
+        if eof_seek {
+            self.template
+                .metrics
+                .seek_to_eof_count
+                .fetch_add(1, Ordering::Relaxed);
+        }
         let cache_hit = self.offset_is_cached(offset);
         let initial_seek = self.generation == 0
             && self.cache.is_empty()
@@ -2295,7 +2480,7 @@ unsafe extern "C" fn stream_close_callback(cookie: *mut c_void) {
         if let Ok(stream) = cookie.stream.lock() {
             let stats = stream.template.stats();
             eprintln!(
-                "native_media_source event=close remote_requests={} bytes_requested={} bytes_received={} bytes_served_to_mpv={} cache_hits={} cache_misses={} cache_seek_hits={} seek_cache_misses={} seeks={} errors={} generation={} cache_peak_bytes={} cache_segments={} cache_peak_segments={} cache_evictions={} cache_evicted_bytes={} cache_preserved_miss_bytes={} cache_preserved_miss_segments={} reservoir_low_bytes={} reservoir_high_bytes={} reservoir_depth_bytes={} reservoir_depth_peak_bytes={} reservoir_refills={} reservoir_ranges_scheduled={} reservoir_ranges_completed={} reservoir_bytes_completed={} pool_slot_0_requests={} pool_slot_1_requests={} metadata_ms={} blocking_fetches={} blocking_fetch_ms_total={} blocking_fetch_ms_max={} range_headers_ms_total={} range_headers_ms_max={} range_body_ms_total={} range_body_ms_max={} range_elapsed_ms_total={} range_elapsed_ms_max={} first_range_headers_ms={} first_range_body_ms={} first_range_elapsed_ms={} slow_250={} slow_500={} slow_1000={} seek_distance_bytes_total={} seek_distance_bytes_max={} prefetch_requests={} prefetch_hits={} prefetch_waits={} prefetch_wait_ms_total={} prefetch_wait_ms_max={} prefetch_wait_extensions={} prefetch_fallbacks={} prefetch_fallback_stalled={} prefetch_fallback_hard={} prefetch_cancelled={} prefetch_stale_results={} prefetch_errors={} prefetch_bytes_discarded={}",
+                "native_media_source event=close remote_requests={} bytes_requested={} bytes_received={} bytes_served_to_mpv={} cache_hits={} cache_misses={} cache_seek_hits={} seek_cache_misses={} seeks={} errors={} generation={} cache_peak_bytes={} cache_segments={} cache_peak_segments={} cache_evictions={} cache_evicted_bytes={} cache_preserved_miss_bytes={} cache_preserved_miss_segments={} reservoir_low_bytes={} reservoir_high_bytes={} reservoir_depth_bytes={} reservoir_depth_peak_bytes={} reservoir_refills={} reservoir_ranges_scheduled={} reservoir_ranges_completed={} reservoir_bytes_completed={} read_calls={} true_eof_reads={} non_eof_zero_reads_prevented={} non_eof_zero_read_failures={} last_non_eof_zero_position={} last_non_eof_zero_remaining={} last_non_eof_zero_generation={} last_read_position={} last_read_requested={} last_read_returned={} last_read_remaining={} source_size={} seek_to_eof_count={} last_seek_offset={} last_seek_previous_position={} pool_slot_0_requests={} pool_slot_1_requests={} metadata_ms={} blocking_fetches={} blocking_fetch_ms_total={} blocking_fetch_ms_max={} range_headers_ms_total={} range_headers_ms_max={} range_body_ms_total={} range_body_ms_max={} range_elapsed_ms_total={} range_elapsed_ms_max={} first_range_headers_ms={} first_range_body_ms={} first_range_elapsed_ms={} slow_250={} slow_500={} slow_1000={} seek_distance_bytes_total={} seek_distance_bytes_max={} prefetch_requests={} prefetch_hits={} prefetch_waits={} prefetch_wait_ms_total={} prefetch_wait_ms_max={} prefetch_wait_extensions={} prefetch_fallbacks={} prefetch_fallback_stalled={} prefetch_fallback_hard={} prefetch_cancelled={} prefetch_stale_results={} prefetch_errors={} prefetch_bytes_discarded={}",
                 stats.remote_requests,
                 stats.bytes_requested,
                 stats.bytes_received,
@@ -2322,6 +2507,21 @@ unsafe extern "C" fn stream_close_callback(cookie: *mut c_void) {
                 stats.reservoir_ranges_scheduled,
                 stats.reservoir_ranges_completed,
                 stats.reservoir_bytes_completed,
+                stats.read_calls,
+                stats.true_eof_reads,
+                stats.non_eof_zero_reads_prevented,
+                stats.non_eof_zero_read_failures,
+                stats.last_non_eof_zero_position,
+                stats.last_non_eof_zero_remaining,
+                stats.last_non_eof_zero_generation,
+                stats.last_read_position,
+                stats.last_read_requested,
+                stats.last_read_returned,
+                stats.last_read_remaining,
+                stats.source_size,
+                stats.seek_to_eof_count,
+                stats.last_seek_offset,
+                stats.last_seek_previous_position,
                 stats.pool_slot_0_requests,
                 stats.pool_slot_1_requests,
                 stats.metadata_elapsed_ms,

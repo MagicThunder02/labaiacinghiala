@@ -560,3 +560,34 @@ test('Phase 6B.7.3.1 protegge gli END_FILE prematuri e ricarica la stessa sorgen
   assert.match(analyzer, /endFileRecoveries/);
   assert.match(analyzer, /endFileRecoveryFailures/);
 });
+
+test('Phase 6B.7.3.2 impedisce EOF sintetici prima della size reale', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+  const nativeSource = read('src-tauri/src/native_media_source.rs');
+  const analyzer = read('scripts/analyze-native-player-transport.js');
+
+  assert.match(nativeSource, /fn force_non_eof_read_recovery/);
+  assert.match(nativeSource, /event=non_eof_zero_read_prevented/);
+  assert.match(nativeSource, /if count == 0 && self\.position < self\.size/);
+  assert.match(nativeSource, /non_eof_zero_reads_prevented/);
+  assert.match(nativeSource, /non_eof_zero_read_failures/);
+  assert.match(nativeSource, /true_eof_reads/);
+  assert.match(nativeSource, /last_non_eof_zero_position/);
+  assert.match(nativeSource, /last_read_returned/);
+  assert.match(nativeSource, /seek_to_eof_count/);
+  assert.match(nativeSource, /last_seek_offset/);
+  assert.match(nativeSource, /source_size/);
+  assert.match(nativeSource, /return Err\(format!\([\s\S]*non puo restituire EOF/);
+
+  assert.match(nativePlayer, /non_eof_zero_reads_prevented=\{\}/);
+  assert.match(nativePlayer, /non_eof_zero_read_failures=\{\}/);
+  assert.match(nativePlayer, /true_eof_reads=\{\}/);
+  assert.match(nativePlayer, /last_non_eof_zero_position=\{\}/);
+  assert.match(analyzer, /nonEofZeroReadsPrevented/);
+  assert.match(analyzer, /nonEofZeroReadFailures/);
+  assert.match(analyzer, /trueEofReads/);
+  assert.match(analyzer, /lastNonEofZeroPositionMiB/);
+  assert.match(analyzer, /seekToEofCount/);
+  assert.match(analyzer, /lastSeekOffsetMiB/);
+});
+

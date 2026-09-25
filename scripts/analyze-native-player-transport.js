@@ -119,6 +119,21 @@ function analyze(file) {
       ? Number((reservoirRangesCompleted / reservoirRangesScheduled).toFixed(3))
       : null,
     reservoirCompletedMiB: (num(summary.reservoir_bytes_completed) || 0) / 1048576,
+    readCalls: num(summary.read_calls),
+    trueEofReads: num(summary.true_eof_reads),
+    nonEofZeroReadsPrevented: num(summary.non_eof_zero_reads_prevented),
+    nonEofZeroReadFailures: num(summary.non_eof_zero_read_failures),
+    lastNonEofZeroPositionMiB: (num(summary.last_non_eof_zero_position) || 0) / 1048576,
+    lastNonEofZeroRemainingMiB: (num(summary.last_non_eof_zero_remaining) || 0) / 1048576,
+    lastNonEofZeroGeneration: num(summary.last_non_eof_zero_generation),
+    lastReadPositionMiB: (num(summary.last_read_position) || 0) / 1048576,
+    lastReadRequestedKiB: (num(summary.last_read_requested) || 0) / 1024,
+    lastReadReturnedKiB: (num(summary.last_read_returned) || 0) / 1024,
+    lastReadRemainingMiB: (num(summary.last_read_remaining) || 0) / 1048576,
+    sourceSizeMiB: (num(summary.source_size) || 0) / 1048576,
+    seekToEofCount: num(summary.seek_to_eof_count),
+    lastSeekOffsetMiB: (num(summary.last_seek_offset) || 0) / 1048576,
+    lastSeekPreviousMiB: (num(summary.last_seek_previous_position) || 0) / 1048576,
     prematureEndFiles: num(summary.premature_end_files),
     endFileRecoveries: num(summary.end_file_recoveries),
     endFileRecoveryFailures: num(summary.end_file_recovery_failures),
@@ -163,7 +178,7 @@ for (const file of files) {
 if (!rows.length) process.exit(process.exitCode || 1);
 
 for (const row of rows) {
-  for (const key of ['maxRangeMiB', 'windowMiB', 'reservoirLowMiB', 'reservoirHighMiB', 'reservoirDepthMiB', 'reservoirDepthPeakMiB', 'reservoirCompletedMiB', 'receivedMiB', 'servedMiB', 'cachePeakMiB', 'cacheEvictedMiB', 'cachePreservedMissMiB', 'maxSeekMiB', 'prefetchDiscardedMiB']) {
+  for (const key of ['maxRangeMiB', 'windowMiB', 'reservoirLowMiB', 'reservoirHighMiB', 'reservoirDepthMiB', 'reservoirDepthPeakMiB', 'reservoirCompletedMiB', 'receivedMiB', 'servedMiB', 'cachePeakMiB', 'cacheEvictedMiB', 'cachePreservedMissMiB', 'maxSeekMiB', 'prefetchDiscardedMiB', 'lastNonEofZeroPositionMiB', 'lastNonEofZeroRemainingMiB', 'lastReadPositionMiB', 'lastReadRemainingMiB', 'lastReadRequestedKiB', 'lastReadReturnedKiB', 'sourceSizeMiB', 'lastSeekOffsetMiB', 'lastSeekPreviousMiB']) {
     if (typeof row[key] === 'number') row[key] = Number(row[key].toFixed(2));
   }
 }
@@ -178,5 +193,5 @@ if (csv) {
   for (const row of rows) console.log(columns.map((column) => esc(row[column])).join(','));
 } else {
   console.table(rows);
-  console.log('\nLettura rapida: 6B.7.3.1 mantiene sparse cache + forward reservoir e protegge dagli END_FILE prematuri. Guarda reservoirDepthMiB/Peak, cachePauseTotalMs e i contatori prematureEndFiles/endFileRecoveries/endFileRecoveryFailures; un END_FILE lontano dalla durata deve essere recuperato senza riesporre la WebView.');
+  console.log('\nLettura rapida: 6B.7.3.2 mantiene sparse cache + reservoir + recovery END_FILE e aggiunge un guard nel read callback: un read da 0 byte e consentito solo al vero EOF. Guarda nonEofZeroReadsPrevented/nonEofZeroReadFailures, trueEofReads, seekToEofCount e lastNonEofZeroPositionMiB per distinguere un falso EOF della sorgente da un EOF reale o da un seek esplicito alla fine del file.');
 }
