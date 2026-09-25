@@ -61,12 +61,26 @@ function analyze(file) {
   const bytesServed = num(summary.bytes_served) || 0;
   const maxRangeBytes = num(summary.max_range_bytes) || 0;
   const windowBytes = num(summary.window_bytes) || 0;
+  const remoteRequests = num(summary.remote_requests);
+  const prefetchRequests = num(summary.prefetch_requests);
+  const prefetchHits = num(summary.prefetch_hits);
+  const prefetchWaits = num(summary.prefetch_waits);
+  const prefetchWaitTotalMs = num(summary.prefetch_wait_ms_total);
+  const reservoirRangesScheduled = num(summary.reservoir_ranges_scheduled);
+  const reservoirRangesCompleted = num(summary.reservoir_ranges_completed);
 
   return {
     file: path.basename(file),
     maxRangeMiB: maxRangeBytes / 1048576,
     windowMiB: windowBytes / 1048576,
-    requests: num(summary.remote_requests),
+    reservoirLowMiB: (num(summary.reservoir_low_bytes) || 0) / 1048576,
+    reservoirHighMiB: (num(summary.reservoir_high_bytes) || 0) / 1048576,
+    reservoirDepthMiB: (num(summary.reservoir_depth_bytes) || 0) / 1048576,
+    reservoirDepthPeakMiB: (num(summary.reservoir_depth_peak_bytes) || 0) / 1048576,
+    requests: remoteRequests,
+    foregroundRequests: remoteRequests != null && prefetchRequests != null
+      ? remoteRequests - prefetchRequests
+      : null,
     receivedMiB: bytesReceived / 1048576,
     servedMiB: bytesServed / 1048576,
     usefulRatio: num(summary.useful_ratio),
@@ -79,6 +93,35 @@ function analyze(file) {
     blockingFetches: num(summary.blocking_fetches),
     avgBlockingFetchMs: num(summary.avg_blocking_fetch_ms),
     maxBlockingFetchMs: num(summary.blocking_fetch_ms_max),
+    prefetchRequests,
+    prefetchHits,
+    prefetchHitRate: prefetchRequests > 0 && prefetchHits != null
+      ? Number((prefetchHits / prefetchRequests).toFixed(3))
+      : null,
+    prefetchWaits,
+    prefetchWaitTotalMs,
+    prefetchWaitAvgMs: prefetchWaits > 0 && prefetchWaitTotalMs != null
+      ? Number((prefetchWaitTotalMs / prefetchWaits).toFixed(1))
+      : null,
+    prefetchWaitMaxMs: num(summary.prefetch_wait_ms_max),
+    prefetchWaitExtensions: num(summary.prefetch_wait_extensions),
+    prefetchFallbacks: num(summary.prefetch_fallbacks),
+    prefetchFallbackStalled: num(summary.prefetch_fallback_stalled),
+    prefetchFallbackHard: num(summary.prefetch_fallback_hard),
+    prefetchCancelled: num(summary.prefetch_cancelled),
+    prefetchStale: num(summary.prefetch_stale_results),
+    prefetchErrors: num(summary.prefetch_errors),
+    prefetchDiscardedMiB: (num(summary.prefetch_bytes_discarded) || 0) / 1048576,
+    reservoirRefills: num(summary.reservoir_refills),
+    reservoirRangesScheduled,
+    reservoirRangesCompleted,
+    reservoirCompletionRate: reservoirRangesScheduled > 0 && reservoirRangesCompleted != null
+      ? Number((reservoirRangesCompleted / reservoirRangesScheduled).toFixed(3))
+      : null,
+    reservoirCompletedMiB: (num(summary.reservoir_bytes_completed) || 0) / 1048576,
+    prematureEndFiles: num(summary.premature_end_files),
+    endFileRecoveries: num(summary.end_file_recoveries),
+    endFileRecoveryFailures: num(summary.end_file_recovery_failures),
     slow250: num(summary.slow_250),
     slow500: num(summary.slow_500),
     slow1000: num(summary.slow_1000),
@@ -87,6 +130,17 @@ function analyze(file) {
     cachePauseMaxMs: num(summary.cache_pause_max_ms),
     seeks: num(summary.seeks),
     cacheSeekHits: num(summary.cache_seek_hits),
+    seekCacheMisses: num(summary.seek_cache_misses),
+    seekCacheHitRate: num(summary.seeks) > 0 && num(summary.cache_seek_hits) != null
+      ? Number((num(summary.cache_seek_hits) / num(summary.seeks)).toFixed(3))
+      : null,
+    cachePeakMiB: (num(summary.cache_peak_bytes) || 0) / 1048576,
+    cacheSegments: num(summary.cache_segments),
+    cachePeakSegments: num(summary.cache_peak_segments),
+    cacheEvictions: num(summary.cache_evictions),
+    cacheEvictedMiB: (num(summary.cache_evicted_bytes) || 0) / 1048576,
+    cachePreservedMissMiB: (num(summary.cache_preserved_miss_bytes) || 0) / 1048576,
+    cachePreservedMissSegments: num(summary.cache_preserved_miss_segments),
     maxSeekMiB: (num(summary.seek_distance_bytes_max) || 0) / 1048576,
     fileLoadedMs,
     revealMs,
@@ -109,7 +163,7 @@ for (const file of files) {
 if (!rows.length) process.exit(process.exitCode || 1);
 
 for (const row of rows) {
-  for (const key of ['maxRangeMiB', 'windowMiB', 'receivedMiB', 'servedMiB', 'maxSeekMiB']) {
+  for (const key of ['maxRangeMiB', 'windowMiB', 'reservoirLowMiB', 'reservoirHighMiB', 'reservoirDepthMiB', 'reservoirDepthPeakMiB', 'reservoirCompletedMiB', 'receivedMiB', 'servedMiB', 'cachePeakMiB', 'cacheEvictedMiB', 'cachePreservedMissMiB', 'maxSeekMiB', 'prefetchDiscardedMiB']) {
     if (typeof row[key] === 'number') row[key] = Number(row[key].toFixed(2));
   }
 }
@@ -124,5 +178,5 @@ if (csv) {
   for (const row of rows) console.log(columns.map((column) => esc(row[column])).join(','));
 } else {
   console.table(rows);
-  console.log('\nLettura rapida: cachePauseCount deve idealmente restare 0; maxBlockingFetchMs e slow500/slow1000 mostrano quanto un confine di Range puo bloccare read_into(); usefulRatio basso dopo seek indica overfetch/spreco.');
+  console.log('\nLettura rapida: 6B.7.3.1 mantiene sparse cache + forward reservoir e protegge dagli END_FILE prematuri. Guarda reservoirDepthMiB/Peak, cachePauseTotalMs e i contatori prematureEndFiles/endFileRecoveries/endFileRecoveryFailures; un END_FILE lontano dalla durata deve essere recuperato senza riesporre la WebView.');
 }

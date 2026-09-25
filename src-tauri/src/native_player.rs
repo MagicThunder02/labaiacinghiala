@@ -1969,11 +1969,31 @@ struct MpvEvent {
     data: *mut c_void,
 }
 
+#[repr(C)]
+struct MpvEventEndFile {
+    // Prefix ABI stabile di mpv_event_end_file (API >= 1.9). Leggiamo solo i
+    // primi due campi: le versioni recenti possono appendere altro alla struct.
+    reason: i32,
+    error: i32,
+}
+
 const MPV_EVENT_NONE: i32 = 0;
 const MPV_EVENT_SHUTDOWN: i32 = 1;
 const MPV_EVENT_END_FILE: i32 = 7;
 const MPV_EVENT_FILE_LOADED: i32 = 8;
 const MPV_EVENT_PLAYBACK_RESTART: i32 = 21;
+
+const MPV_END_FILE_REASON_EOF: i32 = 0;
+const MPV_END_FILE_REASON_STOP: i32 = 2;
+const MPV_END_FILE_REASON_QUIT: i32 = 3;
+const MPV_END_FILE_REASON_ERROR: i32 = 4;
+const MPV_END_FILE_REASON_REDIRECT: i32 = 5;
+
+const PREMATURE_END_NEAR_END_SECONDS: f64 = 8.0;
+const PREMATURE_END_MAX_SAME_REGION_ATTEMPTS: u32 = 3;
+const PREMATURE_END_SAME_REGION_SECONDS: f64 = 2.0;
+const PREMATURE_END_RETRY_WINDOW: Duration = Duration::from_secs(20);
+const PREMATURE_END_STABLE_ADVANCE_SECONDS: f64 = 5.0;
 type MpvStreamCbAddRo = unsafe extern "C" fn(
     *mut c_void,
     *const c_char,
@@ -2119,6 +2139,66 @@ impl MpvApi {
         let command_name = values.first().map(String::as_str).unwrap_or("<empty>");
         self.check(code, &format!("Comando libmpv fallito command={command_name}"))
     }
+}
+
+fn mpv_end_file_reason_name(reason: i32) -> &'static str {
+    match reason {
+        MPV_END_FILE_REASON_EOF => "eof",
+        MPV_END_FILE_REASON_STOP => "stop",
+        MPV_END_FILE_REASON_QUIT => "quit",
+        MPV_END_FILE_REASON_ERROR => "error",
+        MPV_END_FILE_REASON_REDIRECT => "redirect",
+        _ => "unknown",
+    }
+}
+
+fn remaining_playback_seconds(state: &NativePlaybackState) -> Option<f64> {
+    let time_pos = state.time_pos?;
+    let duration = state.duration?;
+    if !time_pos.is_finite() || !duration.is_finite() || duration <= 0.0 {
+        return None;
+    }
+    Some((duration - time_pos).max(0.0))
+}
+
+fn end_file_is_premature(reason: i32, state: &NativePlaybackState) -> bool {
+    matches!(reason, MPV_END_FILE_REASON_EOF | MPV_END_FILE_REASON_ERROR)
+        && remaining_playback_seconds(state)
+            .is_some_and(|remaining| remaining > PREMATURE_END_NEAR_END_SECONDS)
+}
+
+fn recover_premature_end_file(
+    api: &MpvApi,
+    handle: *mut c_void,
+    media_url: &str,
+    state: &NativePlaybackState,
+) -> Result<f64, String> {
+    let position = state
+        .time_pos
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .ok_or_else(|| "Posizione non disponibile per il recovery END_FILE.".to_string())?;
+    let paused = state.paused;
+    let volume = state.volume.unwrap_or(NATIVE_PLAYBACK_START_VOLUME).clamp(0.0, 100.0);
+    let mute = if state.muted { "yes" } else { "no" };
+
+    // Congeliamo esplicitamente il nuovo load finche il comando e accodato, poi
+    // ripristiniamo lo stato precedente. Non parte una seconda intro e la WebView
+    // resta nascosta: e un recovery interno della stessa sessione nativa.
+    api.set_property(handle, "pause", "yes")?;
+    api.set_property(handle, "volume", &format!("{volume:.2}"))?;
+    api.set_property(handle, "mute", mute)?;
+    api.command(
+        handle,
+        &[
+            "loadfile".to_string(),
+            media_url.to_string(),
+            "replace".to_string(),
+            "-1".to_string(),
+            format!("start={position:.3}"),
+        ],
+    )?;
+    api.set_property(handle, "pause", if paused { "yes" } else { "no" })?;
+    Ok(position)
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -2816,7 +2896,7 @@ fn refresh_playback_diagnostics(
             0.0
         };
         diagnostic_log(format!(
-            "native_player transport_sample remote_requests={} bytes_received={} bytes_served={} useful_ratio={:.3} cache_hits={} cache_misses={} cache_seek_hits={} seeks={} generation={} current_range_bytes={} max_range_bytes={} window_bytes={} current_window_bytes={} avg_headers_ms={:.1} avg_body_ms={:.1} avg_range_ms={:.1} max_range_ms={} blocking_fetches={} blocking_fetch_ms_total={} blocking_fetch_ms_max={} slow_250={} slow_500={} slow_1000={} cache_duration={:?} cache_buffering_state={:?} cache_speed={:?} paused_for_cache={}",
+            "native_player transport_sample remote_requests={} bytes_received={} bytes_served={} useful_ratio={:.3} cache_hits={} cache_misses={} cache_seek_hits={} seek_cache_misses={} seeks={} generation={} current_range_bytes={} max_range_bytes={} window_bytes={} reservoir_low_bytes={} reservoir_high_bytes={} current_window_bytes={} reservoir_depth_bytes={} reservoir_depth_peak_bytes={} cache_peak_bytes={} cache_segments={} cache_peak_segments={} cache_evictions={} cache_evicted_bytes={} cache_preserved_miss_bytes={} cache_preserved_miss_segments={} avg_headers_ms={:.1} avg_body_ms={:.1} avg_range_ms={:.1} max_range_ms={} blocking_fetches={} blocking_fetch_ms_total={} blocking_fetch_ms_max={} slow_250={} slow_500={} slow_1000={} prefetch_requests={} prefetch_hits={} prefetch_waits={} prefetch_wait_ms_total={} prefetch_wait_ms_max={} prefetch_wait_extensions={} prefetch_fallbacks={} prefetch_fallback_stalled={} prefetch_fallback_hard={} prefetch_cancelled={} prefetch_stale_results={} prefetch_errors={} prefetch_bytes_discarded={} reservoir_refills={} reservoir_ranges_scheduled={} reservoir_ranges_completed={} reservoir_bytes_completed={} cache_duration={:?} cache_buffering_state={:?} cache_speed={:?} paused_for_cache={}",
             stats.remote_requests,
             stats.bytes_received,
             stats.bytes_served,
@@ -2824,12 +2904,24 @@ fn refresh_playback_diagnostics(
             stats.cache_hits,
             stats.cache_misses,
             stats.cache_seek_hits,
+            stats.seek_cache_misses,
             stats.seeks,
             stats.generation,
             stats.current_range_bytes,
             stats.max_range_bytes,
             stats.window_bytes,
+            stats.reservoir_low_bytes,
+            stats.reservoir_high_bytes,
             stats.current_window_bytes,
+            stats.reservoir_depth_bytes,
+            stats.reservoir_depth_peak_bytes,
+            stats.cache_peak_bytes,
+            stats.cache_segments,
+            stats.cache_peak_segments,
+            stats.cache_evictions,
+            stats.cache_evicted_bytes,
+            stats.cache_preserved_miss_bytes,
+            stats.cache_preserved_miss_segments,
             avg_headers_ms,
             avg_body_ms,
             avg_range_ms,
@@ -2840,6 +2932,23 @@ fn refresh_playback_diagnostics(
             stats.slow_ranges_250ms,
             stats.slow_ranges_500ms,
             stats.slow_ranges_1000ms,
+            stats.prefetch_requests,
+            stats.prefetch_hits,
+            stats.prefetch_waits,
+            stats.prefetch_wait_ms_total,
+            stats.prefetch_wait_ms_max,
+            stats.prefetch_wait_extensions,
+            stats.prefetch_fallbacks,
+            stats.prefetch_fallback_stalled,
+            stats.prefetch_fallback_hard,
+            stats.prefetch_cancelled,
+            stats.prefetch_stale_results,
+            stats.prefetch_errors,
+            stats.prefetch_bytes_discarded,
+            stats.reservoir_refills,
+            stats.reservoir_ranges_scheduled,
+            stats.reservoir_ranges_completed,
+            stats.reservoir_bytes_completed,
             cache_duration,
             cache_buffering_state,
             cache_speed,
@@ -3066,6 +3175,14 @@ fn player_worker(
     let mut cache_pause_count: u64 = 0;
     let mut cache_pause_total_ms: u64 = 0;
     let mut cache_pause_max_ms: u64 = 0;
+    let mut current_media_url: Option<String> = None;
+    let mut premature_end_files: u64 = 0;
+    let mut end_file_recoveries: u64 = 0;
+    let mut end_file_recovery_failures: u64 = 0;
+    let mut premature_end_attempts: u32 = 0;
+    let mut premature_end_last_position: Option<f64> = None;
+    let mut premature_end_last_at: Option<Instant> = None;
+    let mut premature_end_recovery_started: Option<Instant> = None;
 
     while running {
         match receiver.recv_timeout(EVENT_POLL_INTERVAL) {
@@ -3080,6 +3197,14 @@ fn player_worker(
                     response,
                 } => {
                     ui_close_requested.store(false, Ordering::Release);
+                    current_media_url = None;
+                    premature_end_files = 0;
+                    end_file_recoveries = 0;
+                    end_file_recovery_failures = 0;
+                    premature_end_attempts = 0;
+                    premature_end_last_position = None;
+                    premature_end_last_at = None;
+                    premature_end_recovery_started = None;
                     let intro_started = Instant::now();
                     let intro_visual_started = intro_started + PLAYBACK_INTRO_AUDIO_LEAD;
                     playback_intro_started = Some(intro_started);
@@ -3124,6 +3249,7 @@ fn player_worker(
                     render_shared.mark_dirty();
 
                     let result = registry.register(source).and_then(|url| {
+                        current_media_url = Some(url.clone());
                         let _ = (&meta, &accent);
                         api.set_property(handle, "force-media-title", title.trim())?;
                         api.set_property(handle, "volume", &format!("{NATIVE_PLAYBACK_START_VOLUME:.2}"))?;
@@ -3148,6 +3274,7 @@ fn player_worker(
                         Ok(())
                     });
                     if result.is_err() {
+                        current_media_url = None;
                         set_playback_intro_audio(&app, false, "open_failed_native_compositor");
                         playback_intro_started = None;
                         playback_open_started = None;
@@ -3399,6 +3526,14 @@ fn player_worker(
             if event_id == MPV_EVENT_FILE_LOADED {
                 pending_end_file = None;
                 playback_media_ready = true;
+                if let Some(started) = premature_end_recovery_started.take() {
+                    diagnostic_log(format!(
+                        "native_player premature_end_recovery=file_loaded elapsed_ms={} attempts={} recoveries={}",
+                        started.elapsed().as_millis(),
+                        premature_end_attempts,
+                        end_file_recoveries,
+                    ));
+                }
                 diagnostic_log(format!(
                     "native_player event=file_loaded player_backend=libmpv media_source=native_media_source ui={} open_to_file_loaded_ms={}",
                     UI_NAME,
@@ -3421,6 +3556,137 @@ fn player_worker(
                 }
             }
             if event_id == MPV_EVENT_END_FILE {
+                let (end_reason, end_error) = unsafe {
+                    let data = (*event).data;
+                    if data.is_null() {
+                        (-1, (*event).error)
+                    } else {
+                        let end_file = &*(data as *const MpvEventEndFile);
+                        (end_file.reason, end_file.error)
+                    }
+                };
+                let reason_name = mpv_end_file_reason_name(end_reason);
+                let cached_state = last_playback_state
+                    .lock()
+                    .map(|state| state.clone())
+                    .unwrap_or_default();
+                let remaining = remaining_playback_seconds(&cached_state);
+                let near_end = remaining
+                    .is_some_and(|value| value <= PREMATURE_END_NEAR_END_SECONDS);
+                let error_name = if end_error < 0 {
+                    api.error_text(end_error).split_whitespace().collect::<Vec<_>>().join("_")
+                } else {
+                    "none".to_string()
+                };
+
+                diagnostic_log(format!(
+                    "native_player event=end_file player_backend=libmpv ui={} reason={} reason_code={} error_code={} error_name={} time_pos={:?} duration={:?} remaining_seconds={:?} near_end={}",
+                    UI_NAME,
+                    reason_name,
+                    end_reason,
+                    end_error,
+                    error_name,
+                    cached_state.time_pos,
+                    cached_state.duration,
+                    remaining,
+                    near_end,
+                ));
+
+                if end_reason == MPV_END_FILE_REASON_REDIRECT {
+                    pending_end_file = None;
+                    diagnostic_log(
+                        "native_player event=end_file_redirect action=keep_player_alive",
+                    );
+                    continue;
+                }
+
+                if end_file_is_premature(end_reason, &cached_state) {
+                    premature_end_files = premature_end_files.saturating_add(1);
+                    let now = Instant::now();
+                    let position = cached_state.time_pos.unwrap_or(0.0);
+                    let same_region = premature_end_last_position
+                        .is_some_and(|previous| {
+                            (position - previous).abs() <= PREMATURE_END_SAME_REGION_SECONDS
+                        })
+                        && premature_end_last_at.is_some_and(|previous| {
+                            now.saturating_duration_since(previous) <= PREMATURE_END_RETRY_WINDOW
+                        });
+                    premature_end_attempts = if same_region {
+                        premature_end_attempts.saturating_add(1)
+                    } else {
+                        1
+                    };
+                    premature_end_last_position = Some(position);
+                    premature_end_last_at = Some(now);
+
+                    if premature_end_attempts <= PREMATURE_END_MAX_SAME_REGION_ATTEMPTS {
+                        if let Some(media_url) = current_media_url.as_deref() {
+                            match recover_premature_end_file(
+                                &api,
+                                handle,
+                                media_url,
+                                &cached_state,
+                            ) {
+                                Ok(recovery_position) => {
+                                    end_file_recoveries = end_file_recoveries.saturating_add(1);
+                                    premature_end_recovery_started = Some(Instant::now());
+                                    pending_end_file = None;
+                                    if let Ok(mut snapshot) = last_playback_state.lock() {
+                                        snapshot.active = true;
+                                        snapshot.idle = false;
+                                        snapshot.seeking = true;
+                                        snapshot.paused_for_cache = false;
+                                        snapshot.time_pos = Some(recovery_position);
+                                        snapshot.ui_close_requested = false;
+                                    }
+                                    render_shared.update(|ui| {
+                                        ui.time_pos = recovery_position;
+                                        ui.paused = cached_state.paused;
+                                        ui.seek_preview = None;
+                                    });
+                                    render_shared.mark_dirty();
+                                    diagnostic_log(format!(
+                                        "native_player premature_end_recovery=start reason={} error_code={} position={:.3} remaining_seconds={:?} attempt={} max_attempts={} webview_hidden={} action=reload_same_native_source",
+                                        reason_name,
+                                        end_error,
+                                        recovery_position,
+                                        remaining,
+                                        premature_end_attempts,
+                                        PREMATURE_END_MAX_SAME_REGION_ATTEMPTS,
+                                        webview_hidden,
+                                    ));
+                                    continue;
+                                }
+                                Err(error) => {
+                                    end_file_recovery_failures =
+                                        end_file_recovery_failures.saturating_add(1);
+                                    diagnostic_log(format!(
+                                        "native_player premature_end_recovery=error reason={} position={:.3} attempt={} error={}",
+                                        reason_name, position, premature_end_attempts, error
+                                    ));
+                                }
+                            }
+                        } else {
+                            end_file_recovery_failures =
+                                end_file_recovery_failures.saturating_add(1);
+                            diagnostic_log(format!(
+                                "native_player premature_end_recovery=error reason={} position={:.3} attempt={} error=missing_media_url",
+                                reason_name, position, premature_end_attempts
+                            ));
+                        }
+                    } else {
+                        end_file_recovery_failures =
+                            end_file_recovery_failures.saturating_add(1);
+                        diagnostic_log(format!(
+                            "native_player premature_end_recovery=exhausted reason={} position={:.3} attempts={} window_ms={}",
+                            reason_name,
+                            position,
+                            premature_end_attempts,
+                            PREMATURE_END_RETRY_WINDOW.as_millis(),
+                        ));
+                    }
+                }
+
                 let _ = capture_playback_state(
                     &api,
                     handle,
@@ -3429,8 +3695,8 @@ fn player_worker(
                     &last_playback_state,
                 );
                 diagnostic_log(format!(
-                    "native_player event=end_file player_backend=libmpv ui={} action=wait_idle",
-                    UI_NAME
+                    "native_player event=end_file action=wait_idle reason={} near_end={} recovery_attempts={}",
+                    reason_name, near_end, premature_end_attempts
                 ));
                 pending_end_file = Some(Instant::now());
             }
@@ -3561,6 +3827,24 @@ fn player_worker(
                 );
                 update_render_state_from_snapshot(&snapshot, &render_shared);
 
+                if premature_end_attempts > 0 && !snapshot.idle {
+                    if let (Some(recovery_position), Some(current_position)) =
+                        (premature_end_last_position, snapshot.time_pos)
+                    {
+                        if current_position
+                            >= recovery_position + PREMATURE_END_STABLE_ADVANCE_SECONDS
+                        {
+                            diagnostic_log(format!(
+                                "native_player premature_end_recovery=stabilized recovery_position={:.3} current_position={:.3} attempts_reset={}",
+                                recovery_position, current_position, premature_end_attempts
+                            ));
+                            premature_end_attempts = 0;
+                            premature_end_last_position = None;
+                            premature_end_last_at = None;
+                        }
+                    }
+                }
+
                 if snapshot.paused_for_cache {
                     if cache_pause_started.is_none() {
                         cache_pause_started = Some(Instant::now());
@@ -3683,7 +3967,7 @@ fn player_worker(
             0.0
         };
         diagnostic_log(format!(
-            "native_player transport_summary remote_requests={} bytes_requested={} bytes_received={} bytes_served={} useful_ratio={:.3} cache_hits={} cache_misses={} cache_seek_hits={} seeks={} generation={} metadata_ms={} first_range_headers_ms={} first_range_body_ms={} first_range_elapsed_ms={} avg_headers_ms={:.1} avg_body_ms={:.1} avg_range_ms={:.1} max_range_ms={} blocking_fetches={} avg_blocking_fetch_ms={:.1} blocking_fetch_ms_total={} blocking_fetch_ms_max={} slow_250={} slow_500={} slow_1000={} seek_distance_bytes_total={} seek_distance_bytes_max={} max_range_bytes={} window_bytes={} cache_pause_count={} cache_pause_total_ms={} cache_pause_max_ms={}",
+            "native_player transport_summary remote_requests={} bytes_requested={} bytes_received={} bytes_served={} useful_ratio={:.3} cache_hits={} cache_misses={} cache_seek_hits={} seek_cache_misses={} seeks={} generation={} metadata_ms={} first_range_headers_ms={} first_range_body_ms={} first_range_elapsed_ms={} avg_headers_ms={:.1} avg_body_ms={:.1} avg_range_ms={:.1} max_range_ms={} blocking_fetches={} avg_blocking_fetch_ms={:.1} blocking_fetch_ms_total={} blocking_fetch_ms_max={} slow_250={} slow_500={} slow_1000={} seek_distance_bytes_total={} seek_distance_bytes_max={} max_range_bytes={} window_bytes={} reservoir_low_bytes={} reservoir_high_bytes={} reservoir_depth_bytes={} reservoir_depth_peak_bytes={} cache_peak_bytes={} cache_segments={} cache_peak_segments={} cache_evictions={} cache_evicted_bytes={} cache_preserved_miss_bytes={} cache_preserved_miss_segments={} prefetch_requests={} prefetch_hits={} prefetch_waits={} prefetch_wait_ms_total={} prefetch_wait_ms_max={} prefetch_wait_extensions={} prefetch_fallbacks={} prefetch_fallback_stalled={} prefetch_fallback_hard={} prefetch_cancelled={} prefetch_stale_results={} prefetch_errors={} prefetch_bytes_discarded={} reservoir_refills={} reservoir_ranges_scheduled={} reservoir_ranges_completed={} reservoir_bytes_completed={} premature_end_files={} end_file_recoveries={} end_file_recovery_failures={} cache_pause_count={} cache_pause_total_ms={} cache_pause_max_ms={}",
             stats.remote_requests,
             stats.bytes_requested,
             stats.bytes_received,
@@ -3692,6 +3976,7 @@ fn player_worker(
             stats.cache_hits,
             stats.cache_misses,
             stats.cache_seek_hits,
+            stats.seek_cache_misses,
             stats.seeks,
             stats.generation,
             stats.metadata_elapsed_ms,
@@ -3713,6 +3998,37 @@ fn player_worker(
             stats.seek_distance_bytes_max,
             stats.max_range_bytes,
             stats.window_bytes,
+            stats.reservoir_low_bytes,
+            stats.reservoir_high_bytes,
+            stats.reservoir_depth_bytes,
+            stats.reservoir_depth_peak_bytes,
+            stats.cache_peak_bytes,
+            stats.cache_segments,
+            stats.cache_peak_segments,
+            stats.cache_evictions,
+            stats.cache_evicted_bytes,
+            stats.cache_preserved_miss_bytes,
+            stats.cache_preserved_miss_segments,
+            stats.prefetch_requests,
+            stats.prefetch_hits,
+            stats.prefetch_waits,
+            stats.prefetch_wait_ms_total,
+            stats.prefetch_wait_ms_max,
+            stats.prefetch_wait_extensions,
+            stats.prefetch_fallbacks,
+            stats.prefetch_fallback_stalled,
+            stats.prefetch_fallback_hard,
+            stats.prefetch_cancelled,
+            stats.prefetch_stale_results,
+            stats.prefetch_errors,
+            stats.prefetch_bytes_discarded,
+            stats.reservoir_refills,
+            stats.reservoir_ranges_scheduled,
+            stats.reservoir_ranges_completed,
+            stats.reservoir_bytes_completed,
+            premature_end_files,
+            end_file_recoveries,
+            end_file_recovery_failures,
             cache_pause_count,
             cache_pause_total_ms,
             cache_pause_max_ms,
@@ -4098,7 +4414,11 @@ pub async fn baia_core_native_player_stop(
 
 #[cfg(test)]
 mod tests {
-    use super::{clean_accent, configured_value, parse_switch, BACKEND_NAME, UI_NAME};
+    use super::{
+        clean_accent, configured_value, end_file_is_premature, parse_switch,
+        NativePlaybackState, BACKEND_NAME, MPV_END_FILE_REASON_EOF,
+        MPV_END_FILE_REASON_STOP, UI_NAME,
+    };
 
     #[test]
     fn embedded_backend_is_explicitly_libmpv() {
@@ -4126,5 +4446,23 @@ mod tests {
     fn accent_is_bounded_to_hex_rgb() {
         assert_eq!(clean_accent(Some("#A1b2C3".into())), "#a1b2c3");
         assert_eq!(clean_accent(Some("red".into())), "#8f79ff");
+    }
+
+    #[test]
+    fn phase6b731_only_recovers_end_file_far_from_real_end() {
+        let early = NativePlaybackState {
+            time_pos: Some(322.03),
+            duration: Some(5511.04),
+            ..NativePlaybackState::default()
+        };
+        assert!(end_file_is_premature(MPV_END_FILE_REASON_EOF, &early));
+
+        let near_end = NativePlaybackState {
+            time_pos: Some(5506.0),
+            duration: Some(5511.04),
+            ..NativePlaybackState::default()
+        };
+        assert!(!end_file_is_premature(MPV_END_FILE_REASON_EOF, &near_end));
+        assert!(!end_file_is_premature(MPV_END_FILE_REASON_STOP, &early));
     }
 }

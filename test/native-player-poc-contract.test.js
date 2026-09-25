@@ -49,9 +49,8 @@ test('video native path usa baia:// stream callback e bypassa Media Bridge local
   assert.match(nativeSource, /format!\("\{PROTOCOL\}:\/\/movie\/\{token\}"\)/);
   assert.match(nativeSource, /INITIAL_RANGE_BYTES: usize = 1 \* 1024 \* 1024/);
   assert.match(nativeSource, /MID_RANGE_BYTES: usize = 2 \* 1024 \* 1024/);
-  assert.match(nativeSource, /DEFAULT_MAX_RANGE_BYTES: usize = 4 \* 1024 \* 1024/);
-  assert.match(nativeSource, /DEFAULT_WINDOW_BYTES: usize = 16 \* 1024 \* 1024/);
-  assert.match(nativeSource, /VecDeque/);
+  assert.match(nativeSource, /DEFAULT_MAX_RANGE_BYTES: usize = 2 \* 1024 \* 1024/);
+  assert.match(nativeSource, /struct SparseRangeCache/);
   assert.doesNotMatch(nativeSource, /127\.0\.0\.1/);
   assert.doesNotMatch(nativeSource, /TcpListener/);
 });
@@ -390,7 +389,7 @@ test('Tauri mantiene Media Bridge legacy soltanto come fallback', () => {
   assert.match(lib, /media_bridge::baia_core_media_bridge_url/);
 });
 
-test('Phase 6B.6 strumenta transport/chunk senza cambiare i default Phase 4/NativeMediaSource', () => {
+test('Phase 6B.6 mantiene la telemetria transport/chunk usata per i benchmark', () => {
   const nativePlayer = read('src-tauri/src/native_player.rs');
   const nativeSource = read('src-tauri/src/native_media_source.rs');
   const analyzer = read('scripts/analyze-native-player-transport.js');
@@ -409,7 +408,7 @@ test('Phase 6B.6 strumenta transport/chunk senza cambiare i default Phase 4/Nati
     'seek_distance_bytes_max',
   ]) assert.match(nativeSource, new RegExp(field));
 
-  assert.match(nativeSource, /let blocked_started = Instant::now\(\);[\s\S]{0,180}self\.fetch_range\(\)\?/);
+  assert.match(nativeSource, /let blocked_started = Instant::now\(\);/);
   assert.match(nativeSource, /throughput_mib_s=\{:\.2\}/);
   assert.match(nativePlayer, /native_player transport_sample/);
   assert.match(nativePlayer, /native_player transport_summary/);
@@ -417,9 +416,7 @@ test('Phase 6B.6 strumenta transport/chunk senza cambiare i default Phase 4/Nati
   assert.match(nativePlayer, /open_to_file_loaded_ms/);
   assert.match(nativePlayer, /open_to_reveal_ms/);
 
-  // I default di trasporto restano quelli gia validati prima della campagna benchmark.
-  assert.match(nativeSource, /DEFAULT_MAX_RANGE_BYTES: usize = 4 \* 1024 \* 1024/);
-  assert.match(nativeSource, /DEFAULT_WINDOW_BYTES: usize = 16 \* 1024 \* 1024/);
+  // Il profilo mpv resta invariato; la cache NativeMediaSource viene evoluta nelle fasi successive.
   assert.match(nativePlayer, /api\.set_option\(handle, "cache-secs", "45"\)/);
   assert.match(nativePlayer, /api\.set_option\(handle, "stream-buffer-size", "2MiB"\)/);
 
@@ -427,4 +424,139 @@ test('Phase 6B.6 strumenta transport/chunk senza cambiare i default Phase 4/Nati
   assert.match(analyzer, /maxBlockingFetchMs/);
   assert.match(packageJson, /analyze:native-player-transport/);
   assert.match(benchmark, /prefetch asincrono\/doppio buffer/);
+});
+
+
+test('Phase 6B.7 usa Range 2 MiB e prefetch async generation-aware sul secondo client TLS', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+  const nativeSource = read('src-tauri/src/native_media_source.rs');
+  const analyzer = read('scripts/analyze-native-player-transport.js');
+
+  assert.match(nativeSource, /DEFAULT_MAX_RANGE_BYTES: usize = 2 \* 1024 \* 1024/);
+  assert.match(nativeSource, /FOREGROUND_POOL_SLOT: usize = 0/);
+  assert.match(nativeSource, /PREFETCH_POOL_SLOT: usize = 1/);
+  assert.match(nativeSource, /struct PrefetchCoordinator/);
+  assert.match(nativeSource, /thread::Builder::new\(\)[\s\S]*baia-native-prefetch/);
+  assert.match(nativeSource, /event=prefetch_schedule/);
+  assert.match(nativeSource, /event=prefetch_timeout/);
+  assert.match(nativeSource, /prefetch\.invalidate\(\)/);
+  assert.match(nativeSource, /template\.metrics\.generation\.load\(Ordering::Acquire\)/);
+  assert.match(nativeSource, /PREFETCH_BODY_CHUNK_BYTES/);
+  assert.match(nativeSource, /prefetch_cancelled/);
+  assert.match(nativeSource, /prefetch_bytes_discarded/);
+  assert.match(nativeSource, /PREFETCH_WAIT_SOFT_BUDGET/);
+  assert.match(nativeSource, /PREFETCH_WAIT_HARD_BUDGET/);
+  assert.match(nativeSource, /\(\*info\)\.cancel_fn = None/);
+  assert.doesNotMatch(nativeSource, /stream_cancel_callback/);
+
+  assert.match(nativePlayer, /prefetch_requests=\{\}/);
+  assert.match(nativePlayer, /prefetch_wait_ms_max=\{\}/);
+  assert.match(nativePlayer, /prefetch_bytes_discarded=\{\}/);
+  assert.match(analyzer, /prefetchHits/);
+  assert.match(analyzer, /prefetchWaitMaxMs/);
+  assert.match(analyzer, /prefetchDiscardedMiB/);
+});
+
+test('Phase 6B.7.1 usa handoff progress-aware e limita i fallback duplicati', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+  const nativeSource = read('src-tauri/src/native_media_source.rs');
+  const analyzer = read('scripts/analyze-native-player-transport.js');
+
+  assert.match(nativeSource, /PREFETCH_WAIT_SOFT_BUDGET: Duration = Duration::from_millis\(750\)/);
+  assert.match(nativeSource, /PREFETCH_WAIT_HARD_BUDGET: Duration = Duration::from_millis\(3000\)/);
+  assert.match(nativeSource, /PREFETCH_STALL_BUDGET: Duration = Duration::from_millis\(500\)/);
+  assert.match(nativeSource, /struct PrefetchProgress/);
+  assert.match(nativeSource, /headers_received: AtomicBool/);
+  assert.match(nativeSource, /bytes_received: AtomicU64/);
+  assert.match(nativeSource, /fn wait_ready_adaptive/);
+  assert.match(nativeSource, /event=prefetch_wait_extend/);
+  assert.match(nativeSource, /reason=stalled/);
+  assert.match(nativeSource, /reason=hard_cap/);
+  assert.match(nativeSource, /prefetch_wait_extensions/);
+  assert.match(nativeSource, /prefetch_fallback_stalled/);
+  assert.match(nativeSource, /prefetch_fallback_hard/);
+  assert.match(nativePlayer, /prefetch_wait_extensions=\{\}/);
+  assert.match(nativePlayer, /prefetch_fallback_stalled=\{\}/);
+  assert.match(nativePlayer, /prefetch_fallback_hard=\{\}/);
+  assert.match(analyzer, /prefetchWaitExtensions/);
+  assert.match(analyzer, /prefetchFallbackStalled/);
+  assert.match(analyzer, /prefetchFallbackHard/);
+});
+
+
+test('Phase 6B.7.2 usa cache sparsa LRU e preserva i segmenti sui seek miss', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+  const nativeSource = read('src-tauri/src/native_media_source.rs');
+  const analyzer = read('scripts/analyze-native-player-transport.js');
+
+  assert.match(nativeSource, /DEFAULT_WINDOW_BYTES: usize = 64 \* 1024 \* 1024/);
+  assert.match(nativeSource, /MAX_WINDOW_BYTES: usize = 128 \* 1024 \* 1024/);
+  assert.match(nativeSource, /struct SparseRangeCache/);
+  assert.match(nativeSource, /cache_policy=sparse_lru/);
+  assert.match(nativeSource, /event=sparse_cache_miss/);
+  assert.match(nativeSource, /cache_preserved_miss_bytes/);
+  assert.match(nativeSource, /cache_evictions/);
+  assert.match(nativeSource, /fetch_bytes_until_cached/);
+  assert.match(nativeSource, /self\.sequential_fetches = if initial_seek \{ 0 \} else \{ 1 \}/);
+  assert.doesNotMatch(nativeSource, /self\.cache\.clear\(\);\s*self\.cache_start = offset/);
+
+  assert.match(nativePlayer, /seek_cache_misses=\{\}/);
+  assert.match(nativePlayer, /cache_peak_bytes=\{\}/);
+  assert.match(nativePlayer, /cache_evictions=\{\}/);
+  assert.match(nativePlayer, /cache_preserved_miss_bytes=\{\}/);
+  assert.match(analyzer, /seekCacheHitRate/);
+  assert.match(analyzer, /cachePeakMiB/);
+  assert.match(analyzer, /cacheEvictedMiB/);
+});
+
+test('Phase 6B.7.3 usa forward reservoir seriale low/high senza overlap foreground', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+  const nativeSource = read('src-tauri/src/native_media_source.rs');
+  const analyzer = read('scripts/analyze-native-player-transport.js');
+
+  assert.match(nativeSource, /DEFAULT_RESERVOIR_LOW_BYTES: usize = 8 \* 1024 \* 1024/);
+  assert.match(nativeSource, /DEFAULT_RESERVOIR_HIGH_BYTES: usize = 12 \* 1024 \* 1024/);
+  assert.match(nativeSource, /RESERVOIR_LOW_ENV: &str = "BAIA_NATIVE_RESERVOIR_LOW_BYTES"/);
+  assert.match(nativeSource, /RESERVOIR_HIGH_ENV: &str = "BAIA_NATIVE_RESERVOIR_HIGH_BYTES"/);
+  assert.match(nativeSource, /struct PrefetchSpan/);
+  assert.match(nativeSource, /spans: Vec<PrefetchSpan>/);
+  assert.match(nativeSource, /for \(index, span\) in job\.spans\.into_iter\(\)\.enumerate\(\)/);
+  assert.match(nativeSource, /reservoir_policy=serial_low_high/);
+  assert.match(nativeSource, /event=reservoir_refill/);
+  assert.match(nativeSource, /event=reservoir_harvest/);
+  assert.match(nativeSource, /fn ensure_forward_reservoir/);
+  assert.match(nativeSource, /fn harvest_prefetch_ready/);
+  assert.match(nativeSource, /reservoir_ranges_scheduled/);
+  assert.match(nativeSource, /reservoir_ranges_completed/);
+  assert.doesNotMatch(nativeSource, /prefetch_overlap_scheduled/);
+
+  assert.match(nativePlayer, /reservoir_low_bytes=\{\}/);
+  assert.match(nativePlayer, /reservoir_high_bytes=\{\}/);
+  assert.match(nativePlayer, /reservoir_depth_bytes=\{\}/);
+  assert.match(nativePlayer, /reservoir_ranges_completed=\{\}/);
+  assert.match(analyzer, /reservoirLowMiB/);
+  assert.match(analyzer, /reservoirDepthMiB/);
+  assert.match(analyzer, /reservoirCompletionRate/);
+});
+
+test('Phase 6B.7.3.1 protegge gli END_FILE prematuri e ricarica la stessa sorgente nativa', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+  const analyzer = read('scripts/analyze-native-player-transport.js');
+
+  assert.match(nativePlayer, /struct MpvEventEndFile/);
+  assert.match(nativePlayer, /MPV_END_FILE_REASON_EOF: i32 = 0/);
+  assert.match(nativePlayer, /MPV_END_FILE_REASON_ERROR: i32 = 4/);
+  assert.match(nativePlayer, /PREMATURE_END_NEAR_END_SECONDS: f64 = 8\.0/);
+  assert.match(nativePlayer, /fn end_file_is_premature/);
+  assert.match(nativePlayer, /fn recover_premature_end_file/);
+  assert.match(nativePlayer, /current_media_url = Some\(url\.clone\(\)\)/);
+  assert.match(nativePlayer, /premature_end_recovery=start/);
+  assert.match(nativePlayer, /action=reload_same_native_source/);
+  assert.match(nativePlayer, /premature_end_recovery=stabilized/);
+  assert.match(nativePlayer, /premature_end_files=\{\}/);
+  assert.match(nativePlayer, /end_file_recoveries=\{\}/);
+  assert.match(nativePlayer, /end_file_recovery_failures=\{\}/);
+  assert.match(analyzer, /prematureEndFiles/);
+  assert.match(analyzer, /endFileRecoveries/);
+  assert.match(analyzer, /endFileRecoveryFailures/);
 });
