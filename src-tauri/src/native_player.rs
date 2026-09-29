@@ -52,12 +52,20 @@ const PLAYBACK_INTRO_PREROLL_FAILSAFE: Duration = Duration::from_millis(900);
 const NATIVE_PLAYBACK_START_VOLUME: f64 = 100.0;
 const FULLSCREEN_CONTROLS_HIDE_DELAY: Duration = Duration::from_secs(3);
 
+#[derive(Debug, Clone)]
+struct AudioTrackInfo {
+    id: i64,
+    label: String,
+    selected: bool,
+}
+
 #[derive(Debug)]
 enum SurfaceAction {
     TogglePause,
     SeekAbsolute(f64),
     SeekRelative(f64),
     SetVolume(f64),
+    SelectAudioTrack(i64),
     ToggleFullscreen,
     RequestClose,
 }
@@ -72,10 +80,18 @@ struct RenderUiState {
     accent: [f32; 3],
     close_requested: bool,
     seek_preview: Option<f64>,
+    // Solo stato visivo: durante il drag impedisce agli snapshot periodici di
+    // riportare il thumb alla time_pos corrente tra un WM_MOUSEMOVE e l'altro.
+    // Non modifica quando o come viene inviato il seek reale a libmpv.
+    seek_drag_active: bool,
     intro_visible: bool,
     intro_started_at: Option<Instant>,
     controls_visible: bool,
     controls_hide_at: Option<Instant>,
+    audio_tracks: Vec<AudioTrackInfo>,
+    audio_menu_open: bool,
+    audio_menu_hover: Option<usize>,
+    audio_menu_scroll: usize,
 }
 
 impl Default for RenderUiState {
@@ -89,10 +105,15 @@ impl Default for RenderUiState {
             accent: [0.48, 0.69, 0.27],
             close_requested: false,
             seek_preview: None,
+            seek_drag_active: false,
             intro_visible: false,
             intro_started_at: None,
             controls_visible: true,
             controls_hide_at: None,
+            audio_tracks: Vec::new(),
+            audio_menu_open: false,
+            audio_menu_hover: None,
+            audio_menu_scroll: 0,
         }
     }
 }
@@ -109,7 +130,7 @@ impl RenderUiState {
     }
 
     fn controls_can_auto_hide(&self) -> bool {
-        self.fullscreen && !self.paused && !self.intro_visible
+        self.fullscreen && !self.paused && !self.intro_visible && !self.audio_menu_open
     }
 
     fn schedule_controls_hide(&mut self, now: Instant) {
@@ -131,6 +152,46 @@ impl RenderUiState {
     fn hide_controls(&mut self) {
         self.controls_visible = false;
         self.controls_hide_at = None;
+        self.audio_menu_open = false;
+        self.audio_menu_hover = None;
+    }
+
+    fn set_audio_tracks(&mut self, tracks: Vec<AudioTrackInfo>) {
+        self.audio_tracks = tracks;
+        if self.audio_tracks.is_empty() {
+            self.audio_menu_open = false;
+            self.audio_menu_hover = None;
+            self.audio_menu_scroll = 0;
+            return;
+        }
+        self.audio_menu_hover = self
+            .audio_menu_hover
+            .filter(|index| *index < self.audio_tracks.len());
+        self.audio_menu_scroll = self
+            .audio_menu_scroll
+            .min(self.audio_tracks.len().saturating_sub(1));
+    }
+
+    fn toggle_audio_menu(&mut self, now: Instant) {
+        if self.audio_tracks.is_empty() {
+            return;
+        }
+        self.audio_menu_open = !self.audio_menu_open;
+        self.audio_menu_hover = None;
+        if self.audio_menu_open {
+            self.begin_controls_interaction();
+        } else {
+            self.schedule_controls_hide(now);
+        }
+    }
+
+    fn close_audio_menu(&mut self, now: Instant) {
+        if !self.audio_menu_open {
+            return;
+        }
+        self.audio_menu_open = false;
+        self.audio_menu_hover = None;
+        self.schedule_controls_hide(now);
     }
 
     fn auto_hide_controls_if_due(&mut self, now: Instant) -> bool {
@@ -162,6 +223,8 @@ impl RenderUiState {
             return;
         }
         self.fullscreen = fullscreen;
+        self.audio_menu_open = false;
+        self.audio_menu_hover = None;
         // Come il WebView: ogni cambio fullscreen rende i controlli visibili;
         // entrando a video in riproduzione riparte il timer da tre secondi.
         self.show_controls(now);
@@ -220,6 +283,8 @@ mod win32_render_surface {
         c_char, c_void, diagnostic_log, RenderShared, SurfaceAction,
     };
     use std::{
+        cell::{Cell, RefCell},
+        collections::HashMap,
         ffi::CStr,
         mem,
         ptr,
@@ -236,8 +301,14 @@ mod win32_render_surface {
     type Hcursor = isize;
     type Hbrush = isize;
     type Hmenu = isize;
+    type Hgdiobj = isize;
+    type Hbitmap = isize;
+    type Hfont = isize;
+    type Handle = isize;
     type Bool = i32;
     type Atom = u16;
+    type WglSwapIntervalExt = unsafe extern "system" fn(interval: i32) -> Bool;
+    type WglGetSwapIntervalExt = unsafe extern "system" fn() -> i32;
 
     const CS_OWNDC: u32 = 0x0020;
     const WS_CHILD: u32 = 0x40000000;
@@ -249,6 +320,18 @@ mod win32_render_surface {
     const PFD_SUPPORT_OPENGL: u32 = 0x00000020;
     const PFD_TYPE_RGBA: u8 = 0;
     const PFD_MAIN_PLANE: i8 = 0;
+    const BI_RGB: u32 = 0;
+    const DIB_RGB_COLORS: u32 = 0;
+    const TRANSPARENT: i32 = 1;
+    const DEFAULT_CHARSET: u32 = 1;
+    const OUT_DEFAULT_PRECIS: u32 = 0;
+    const CLIP_DEFAULT_PRECIS: u32 = 0;
+    const ANTIALIASED_QUALITY: u32 = 4;
+    const DEFAULT_PITCH: u32 = 0;
+    const DT_VCENTER: u32 = 0x00000004;
+    const DT_SINGLELINE: u32 = 0x00000020;
+    const DT_NOPREFIX: u32 = 0x00000800;
+    const DT_END_ELLIPSIS: u32 = 0x00008000;
     const SWP_NOACTIVATE: u32 = 0x0010;
     const SWP_SHOWWINDOW: u32 = 0x0040;
     const HWND_TOP: Hwnd = 0;
@@ -258,6 +341,7 @@ mod win32_render_surface {
     const WM_MOUSEMOVE: u32 = 0x0200;
     const WM_LBUTTONDOWN: u32 = 0x0201;
     const WM_LBUTTONUP: u32 = 0x0202;
+    const WM_MOUSEWHEEL: u32 = 0x020A;
     const WM_KEYDOWN: u32 = 0x0100;
     const WM_DESTROY: u32 = 0x0002;
 
@@ -273,6 +357,7 @@ mod win32_render_surface {
     const GL_PROJECTION: u32 = 0x1701;
     const GL_MODELVIEW: u32 = 0x1700;
     const GL_TEXTURE: u32 = 0x1702;
+    const GL_TRIANGLE_FAN: u32 = 0x0006;
     const GL_QUADS: u32 = 0x0007;
     const GL_TEXTURE_2D: u32 = 0x0DE1;
     const GL_ALPHA: u32 = 0x1906;
@@ -285,6 +370,7 @@ mod win32_render_surface {
     const GL_LINEAR: i32 = 0x2601;
     const GL_CLAMP: i32 = 0x2900;
     const GL_UNPACK_ALIGNMENT: u32 = 0x0CF5;
+    const GL_PACK_ALIGNMENT: u32 = 0x0D05;
     const GL_TEXTURE_ENV: u32 = 0x2300;
     const GL_TEXTURE_ENV_MODE: u32 = 0x2200;
     const GL_MODULATE: i32 = 0x2100;
@@ -362,6 +448,38 @@ mod win32_render_surface {
         dw_damage_mask: u32,
     }
 
+    #[repr(C)]
+    #[derive(Default, Clone, Copy)]
+    struct BitmapInfoHeader {
+        bi_size: u32,
+        bi_width: i32,
+        bi_height: i32,
+        bi_planes: u16,
+        bi_bit_count: u16,
+        bi_compression: u32,
+        bi_size_image: u32,
+        bi_x_pels_per_meter: i32,
+        bi_y_pels_per_meter: i32,
+        bi_clr_used: u32,
+        bi_clr_important: u32,
+    }
+
+    #[repr(C)]
+    #[derive(Default, Clone, Copy)]
+    struct RgbQuad {
+        blue: u8,
+        green: u8,
+        red: u8,
+        reserved: u8,
+    }
+
+    #[repr(C)]
+    #[derive(Default, Clone, Copy)]
+    struct BitmapInfo {
+        bmi_header: BitmapInfoHeader,
+        bmi_colors: [RgbQuad; 1],
+    }
+
     #[link(name = "user32")]
     extern "system" {
         fn RegisterClassW(class: *const WndClassW) -> Atom;
@@ -401,13 +519,56 @@ mod win32_render_surface {
         fn PeekMessageW(msg: *mut Msg, hwnd: Hwnd, min: u32, max: u32, remove: u32) -> Bool;
         fn TranslateMessage(msg: *const Msg) -> Bool;
         fn DispatchMessageW(msg: *const Msg) -> isize;
+        fn DrawTextW(hdc: Hdc, text: *mut u16, count: i32, rect: *mut Rect, format: u32) -> i32;
     }
 
     #[link(name = "gdi32")]
     extern "system" {
         fn ChoosePixelFormat(hdc: Hdc, pfd: *const PixelFormatDescriptor) -> i32;
+        fn DescribePixelFormat(
+            hdc: Hdc,
+            format: i32,
+            bytes: u32,
+            pfd: *mut PixelFormatDescriptor,
+        ) -> i32;
         fn SetPixelFormat(hdc: Hdc, format: i32, pfd: *const PixelFormatDescriptor) -> Bool;
         fn SwapBuffers(hdc: Hdc) -> Bool;
+        fn CreateCompatibleDC(hdc: Hdc) -> Hdc;
+        fn DeleteDC(hdc: Hdc) -> Bool;
+        fn CreateDIBSection(
+            hdc: Hdc,
+            bitmap_info: *const BitmapInfo,
+            usage: u32,
+            bits: *mut *mut c_void,
+            section: Handle,
+            offset: u32,
+        ) -> Hbitmap;
+        fn SelectObject(hdc: Hdc, object: Hgdiobj) -> Hgdiobj;
+        fn DeleteObject(object: Hgdiobj) -> Bool;
+        fn CreateFontW(
+            height: i32,
+            width: i32,
+            escapement: i32,
+            orientation: i32,
+            weight: i32,
+            italic: u32,
+            underline: u32,
+            strike_out: u32,
+            char_set: u32,
+            out_precision: u32,
+            clip_precision: u32,
+            quality: u32,
+            pitch_and_family: u32,
+            face_name: *const u16,
+        ) -> Hfont;
+        fn SetBkMode(hdc: Hdc, mode: i32) -> i32;
+        fn SetTextColor(hdc: Hdc, color: u32) -> u32;
+        fn AddFontMemResourceEx(
+            font: *mut c_void,
+            size: u32,
+            reserved: *mut c_void,
+            fonts: *mut u32,
+        ) -> Handle;
     }
 
     #[link(name = "opengl32")]
@@ -441,6 +602,16 @@ mod win32_render_surface {
             kind: u32,
             pixels: *const c_void,
         );
+        fn glReadPixels(
+            x: i32,
+            y: i32,
+            width: i32,
+            height: i32,
+            format: u32,
+            kind: u32,
+            pixels: *mut c_void,
+        );
+        fn glDeleteTextures(count: i32, textures: *const u32);
         fn glTexCoord2f(s: f32, t: f32);
         fn glPixelStorei(pname: u32, param: i32);
         fn glTexEnvi(target: u32, pname: u32, param: i32);
@@ -454,7 +625,89 @@ mod win32_render_surface {
         fn GetProcAddress(module: Hmodule, name: *const c_char) -> *mut c_void;
     }
 
+    unsafe fn wgl_extension_proc(name: &[u8]) -> *mut c_void {
+        let address = wglGetProcAddress(name.as_ptr().cast::<c_char>());
+        if address.is_null() || matches!(address as isize, 1 | 2 | 3 | -1) {
+            ptr::null_mut()
+        } else {
+            address
+        }
+    }
+
     const POINTER_MOVE_WAKE_THRESHOLD: f32 = 2.0;
+    const AUDIO_BUTTON_DIAMETER: f32 = 52.0;
+    const AUDIO_BUTTON_GAP: f32 = 10.0;
+    const AUDIO_MENU_HEADER_HEIGHT: f32 = 42.0;
+    const AUDIO_MENU_ROW_HEIGHT: f32 = 36.0;
+    const AUDIO_MENU_BOTTOM_GAP: f32 = 18.0;
+
+    #[derive(Clone, Copy)]
+    struct AudioMenuLayout {
+        left: f32,
+        top: f32,
+        width: f32,
+        header_height: f32,
+        row_height: f32,
+        visible_rows: usize,
+        start_index: usize,
+    }
+
+    impl AudioMenuLayout {
+        fn bottom(&self) -> f32 {
+            self.top + self.header_height + self.row_height * self.visible_rows as f32 + 12.0
+        }
+
+        fn row_top(&self, visible_index: usize) -> f32 {
+            self.top + self.header_height + visible_index as f32 * self.row_height
+        }
+
+        fn hit_track_index(&self, x: f32, y: f32, total_tracks: usize) -> Option<usize> {
+            if x < self.left || x > self.left + self.width {
+                return None;
+            }
+            let rows_top = self.top + self.header_height;
+            let rows_bottom = rows_top + self.row_height * self.visible_rows as f32;
+            if y < rows_top || y >= rows_bottom {
+                return None;
+            }
+            let visible = ((y - rows_top) / self.row_height).floor() as usize;
+            let index = self.start_index.saturating_add(visible);
+            (index < total_tracks).then_some(index)
+        }
+    }
+
+    fn audio_button_center(width: f32, height: f32) -> (f32, f32) {
+        let fullscreen_x = width - 54.0;
+        (
+            fullscreen_x - AUDIO_BUTTON_DIAMETER - AUDIO_BUTTON_GAP,
+            height - 52.0,
+        )
+    }
+
+    fn audio_menu_layout(width: f32, height: f32, state: &super::RenderUiState) -> AudioMenuLayout {
+        let panel_width = (width * 0.29).clamp(282.0, 350.0).min((width - 32.0).max(180.0));
+        let right = width - 28.0;
+        let left = (right - panel_width).max(16.0);
+        let bottom = (height - 124.0).max(150.0);
+        let available = (bottom - 92.0 - AUDIO_MENU_HEADER_HEIGHT - 12.0)
+            .max(AUDIO_MENU_ROW_HEIGHT);
+        let max_rows = (available / AUDIO_MENU_ROW_HEIGHT).floor().max(1.0) as usize;
+        let visible_rows = state.audio_tracks.len().min(max_rows.max(1));
+        let max_start = state.audio_tracks.len().saturating_sub(visible_rows);
+        let start_index = state.audio_menu_scroll.min(max_start);
+        let panel_height =
+            AUDIO_MENU_HEADER_HEIGHT + AUDIO_MENU_ROW_HEIGHT * visible_rows as f32 + 12.0;
+        let top = (bottom - panel_height - AUDIO_MENU_BOTTOM_GAP).max(72.0);
+        AudioMenuLayout {
+            left,
+            top,
+            width: panel_width,
+            header_height: AUDIO_MENU_HEADER_HEIGHT,
+            row_height: AUDIO_MENU_ROW_HEIGHT,
+            visible_rows,
+            start_index,
+        }
+    }
 
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum DragMode {
@@ -531,6 +784,42 @@ mod win32_render_surface {
             }
         }
 
+        fn toggle_audio_menu(&self, now: Instant) {
+            self.shared.update(|ui| ui.toggle_audio_menu(now));
+        }
+
+        fn close_audio_menu(&self, now: Instant) {
+            self.shared.update(|ui| ui.close_audio_menu(now));
+        }
+
+        fn audio_menu_hover_at(&self, x: f32, y: f32, width: f32, height: f32) -> Option<usize> {
+            let state = self.shared.snapshot();
+            if !state.audio_menu_open {
+                return None;
+            }
+            let layout = audio_menu_layout(width, height, &state);
+            layout.hit_track_index(x, y, state.audio_tracks.len())
+        }
+
+        fn scroll_audio_menu(&self, hwnd: Hwnd, wheel_delta: i16) {
+            let state = self.shared.snapshot();
+            if !state.audio_menu_open || state.audio_tracks.len() <= 1 || wheel_delta == 0 {
+                return;
+            }
+            let Some((width, height)) = Self::dimensions(hwnd) else { return; };
+            let layout = audio_menu_layout(width, height, &state);
+            let current = layout.start_index;
+            self.shared.update(|ui| {
+                ui.audio_menu_scroll = if wheel_delta < 0 {
+                    current.saturating_add(1)
+                } else {
+                    current.saturating_sub(1)
+                };
+                ui.audio_menu_hover = None;
+                ui.begin_controls_interaction();
+            });
+        }
+
         fn request_close(&self) {
             // Feedback visivo immediato: il compositor viene spento dal render
             // thread senza aspettare stop/demuxer teardown. La WebView resta comunque
@@ -573,9 +862,41 @@ mod win32_render_surface {
                 return;
             }
 
+            if state.audio_menu_open {
+                let layout = audio_menu_layout(width, height, &state);
+                if let Some(index) = layout.hit_track_index(x, y, state.audio_tracks.len()) {
+                    if let Some(track) = state.audio_tracks.get(index) {
+                        let track_id = track.id;
+                        self.shared.update(|ui| {
+                            for item in &mut ui.audio_tracks {
+                                item.selected = item.id == track_id;
+                            }
+                            ui.close_audio_menu(now);
+                        });
+                        let _ = self.actions.send(SurfaceAction::SelectAudioTrack(track_id));
+                    }
+                    return;
+                }
+
+                let (audio_x, audio_y) = audio_button_center(width, height);
+                let dx = x - audio_x;
+                let dy = y - audio_y;
+                if dx * dx + dy * dy <= 34.0 * 34.0 {
+                    self.toggle_audio_menu(now);
+                    return;
+                }
+
+                // Come il pannello filtri della home: un click esterno chiude il menu
+                // e poi lascia proseguire l'eventuale azione sottostante.
+                self.close_audio_menu(now);
+            }
+
             let seek_y = height - 106.0;
             if x >= 32.0 && x <= width - 32.0 && (y - seek_y).abs() <= 22.0 {
-                self.shared.update(|ui| ui.begin_controls_interaction());
+                self.shared.update(|ui| {
+                    ui.begin_controls_interaction();
+                    ui.seek_drag_active = true;
+                });
                 if let Ok(mut drag) = self.drag.lock() { *drag = DragMode::Seek; }
                 unsafe { let _ = SetCapture(hwnd); }
                 self.seek_at(x, width, false);
@@ -592,7 +913,21 @@ mod win32_render_surface {
                 return;
             }
 
-            if x >= width - 104.0 && y >= height - 90.0 {
+            let (audio_x, audio_y) = audio_button_center(width, height);
+            if !state.audio_tracks.is_empty() {
+                let dx = x - audio_x;
+                let dy = y - audio_y;
+                if dx * dx + dy * dy <= 34.0 * 34.0 {
+                    self.toggle_audio_menu(now);
+                    return;
+                }
+            }
+
+            let fullscreen_x = width - 54.0;
+            let fullscreen_y = height - 52.0;
+            let dx = x - fullscreen_x;
+            let dy = y - fullscreen_y;
+            if dx * dx + dy * dy <= 34.0 * 34.0 {
                 self.shared.update(|ui| ui.show_controls(now));
                 let _ = self.actions.send(SurfaceAction::ToggleFullscreen);
                 return;
@@ -626,6 +961,19 @@ mod win32_render_surface {
                 DragMode::Seek => self.seek_at(x, width, false),
                 DragMode::Volume => self.volume_at(y, height, false),
                 DragMode::None => {
+                    let state = self.shared.snapshot();
+                    if state.audio_menu_open {
+                        let hover = self.audio_menu_hover_at(x, y, width, height);
+                        if hover != state.audio_menu_hover {
+                            self.shared.update(|ui| {
+                                ui.audio_menu_hover = hover;
+                                ui.begin_controls_interaction();
+                            });
+                        }
+                        let _ = self.remember_pointer(x, y);
+                        return;
+                    }
+
                     // WM_MOUSEMOVE puo arrivare anche come effetto collaterale di
                     // un click. Riaccendiamo i controlli solo dopo uno spostamento
                     // reale del puntatore, non per il messaggio sintetico a coordinate
@@ -651,6 +999,7 @@ mod win32_render_surface {
             let _ = self.remember_pointer(x, y);
             match drag {
                 DragMode::Seek => {
+                    self.shared.update(|ui| ui.seek_drag_active = false);
                     self.seek_at(x, width, true);
                     let now = Instant::now();
                     self.shared.update(|ui| ui.show_controls(now));
@@ -683,7 +1032,10 @@ mod win32_render_surface {
                 VK_RIGHT => { let _ = self.actions.send(SurfaceAction::SeekRelative(10.0)); }
                 VK_F => { let _ = self.actions.send(SurfaceAction::ToggleFullscreen); }
                 VK_ESCAPE => {
-                    if self.shared.snapshot().fullscreen {
+                    let snapshot = self.shared.snapshot();
+                    if snapshot.audio_menu_open {
+                        self.close_audio_menu(Instant::now());
+                    } else if snapshot.fullscreen {
                         let _ = self.actions.send(SurfaceAction::ToggleFullscreen);
                     } else {
                         self.request_close();
@@ -720,6 +1072,11 @@ mod win32_render_surface {
                     bridge.mouse_up(hwnd, x, y);
                     return 0;
                 }
+                WM_MOUSEWHEEL => {
+                    let delta = ((wparam >> 16) as u16) as i16;
+                    bridge.scroll_audio_menu(hwnd, delta);
+                    return 0;
+                }
                 WM_KEYDOWN => {
                     bridge.key_down(wparam);
                     return 0;
@@ -748,26 +1105,29 @@ mod win32_render_surface {
     }
 
     const ICON_CHEVRON_LEFT_ALPHA: &[u8] =
-        include_bytes!("native_player_assets/chevron-left-16.alpha");
-    const ICON_PLAY_ALPHA: &[u8] = include_bytes!("native_player_assets/play-27.alpha");
-    const ICON_PAUSE_ALPHA: &[u8] = include_bytes!("native_player_assets/pause-27.alpha");
+        include_bytes!("native_player_assets/chevron-left-qhd-40.alpha");
+    const ICON_PLAY_ALPHA: &[u8] = include_bytes!("native_player_assets/play-qhd-54.alpha");
+    const ICON_PAUSE_ALPHA: &[u8] = include_bytes!("native_player_assets/pause-qhd-54.alpha");
     const ICON_FULLSCREEN_ENTER_ALPHA: &[u8] =
-        include_bytes!("native_player_assets/fullscreen-enter-25.alpha");
+        include_bytes!("native_player_assets/fullscreen-enter-qhd-50.alpha");
     const ICON_FULLSCREEN_EXIT_ALPHA: &[u8] =
-        include_bytes!("native_player_assets/fullscreen-exit-25.alpha");
-    const ICON_VOLUME_ALPHA: &[u8] = include_bytes!("native_player_assets/volume-29.alpha");
-    const CIRCLE_16_ALPHA: &[u8] = include_bytes!("native_player_assets/circle-16.alpha");
-    const CIRCLE_64_ALPHA: &[u8] = include_bytes!("native_player_assets/circle-64.alpha");
+        include_bytes!("native_player_assets/fullscreen-exit-qhd-50.alpha");
+    const ICON_VOLUME_ALPHA: &[u8] = include_bytes!("native_player_assets/volume-qhd-58.alpha");
+    const ICON_AUDIO_TRACK_ALPHA: &[u8] =
+        include_bytes!("native_player_assets/audio-track-qhd-50.alpha");
+    const CIRCLE_16_ALPHA: &[u8] = include_bytes!("native_player_assets/circle-qhd-32.alpha");
+    const CIRCLE_64_ALPHA: &[u8] = include_bytes!("native_player_assets/circle-qhd-128.alpha");
     const BACK_BUTTON_PILL_ALPHA: &[u8] =
-        include_bytes!("native_player_assets/back-pill-208x84.alpha");
+        include_bytes!("native_player_assets/back-rounded-qhd-208x84.alpha");
     const TEXT_INDIETRO_ALPHA: &[u8] =
-        include_bytes!("native_player_assets/text-indietro-100x32.alpha");
+        include_bytes!("native_player_assets/text-indietro-400x128.alpha");
     const TIME_GLYPHS_ALPHA: &[u8] =
-        include_bytes!("native_player_assets/time-glyphs-312x40.alpha");
+        include_bytes!("native_player_assets/time-glyphs-1248x160.alpha");
+    const OUTFIT_FONT_TTF: &[u8] = include_bytes!("../../public/fonts/Outfit-VariableFont_wght.ttf");
     const TIME_GLYPHS: &str = "0123456789:-/";
     const TIME_GLYPH_COUNT: usize = 13;
-    const TIME_GLYPH_CELL_WIDTH: f32 = 24.0;
-    const TIME_GLYPH_CELL_HEIGHT: f32 = 40.0;
+    const TIME_GLYPH_CELL_WIDTH: f32 = 96.0;
+    const TIME_GLYPH_CELL_HEIGHT: f32 = 160.0;
 
     // Derivati dagli SVG originali in public/assets/app-intro. Sono raster ad
     // alta risoluzione incorporati nel binario: nessuna dipendenza SVG/runtime.
@@ -871,6 +1231,235 @@ mod win32_render_surface {
         }
     }
 
+    #[derive(Clone, Hash, PartialEq, Eq)]
+    struct TextCacheKey {
+        text: String,
+        font_px: u16,
+        max_width: u16,
+        weight: u16,
+    }
+
+    #[derive(Clone, Copy)]
+    struct RasterTextTexture {
+        texture: UiTexture,
+        width: f32,
+        height: f32,
+    }
+
+    struct UiTextRenderer {
+        cache: RefCell<HashMap<TextCacheKey, RasterTextTexture>>,
+        _font_resource: Handle,
+    }
+
+    impl UiTextRenderer {
+        fn create() -> Self {
+            let mut font_count = 0u32;
+            let font_resource = unsafe {
+                AddFontMemResourceEx(
+                    OUTFIT_FONT_TTF.as_ptr() as *mut c_void,
+                    OUTFIT_FONT_TTF.len().min(u32::MAX as usize) as u32,
+                    ptr::null_mut(),
+                    &mut font_count,
+                )
+            };
+            diagnostic_log(format!(
+                "native_player ui_text_renderer=gdi_supersampled font=Outfit loaded={} faces={}",
+                font_resource != 0,
+                font_count,
+            ));
+            Self {
+                cache: RefCell::new(HashMap::new()),
+                _font_resource: font_resource,
+            }
+        }
+
+        fn rasterize(
+            &self,
+            text: &str,
+            font_px: u16,
+            max_width: u16,
+            weight: u16,
+        ) -> Option<RasterTextTexture> {
+            const SUPERSAMPLE: i32 = 8;
+            let logical_width = i32::from(max_width.max(8));
+            let logical_font = i32::from(font_px.max(8));
+            let logical_height = ((logical_font as f32) * 1.55).ceil() as i32;
+            let bitmap_width = logical_width.saturating_mul(SUPERSAMPLE).max(8);
+            let bitmap_height = logical_height.saturating_mul(SUPERSAMPLE).max(8);
+            let byte_len = (bitmap_width as usize)
+                .saturating_mul(bitmap_height as usize)
+                .saturating_mul(4);
+
+            let hdc = unsafe { CreateCompatibleDC(0) };
+            if hdc == 0 {
+                return None;
+            }
+
+            let bitmap_info = BitmapInfo {
+                bmi_header: BitmapInfoHeader {
+                    bi_size: mem::size_of::<BitmapInfoHeader>() as u32,
+                    bi_width: bitmap_width,
+                    bi_height: -bitmap_height,
+                    bi_planes: 1,
+                    bi_bit_count: 32,
+                    bi_compression: BI_RGB,
+                    bi_size_image: byte_len.min(u32::MAX as usize) as u32,
+                    ..BitmapInfoHeader::default()
+                },
+                bmi_colors: [RgbQuad::default()],
+            };
+            let mut bits: *mut c_void = ptr::null_mut();
+            let bitmap = unsafe {
+                CreateDIBSection(
+                    hdc,
+                    &bitmap_info,
+                    DIB_RGB_COLORS,
+                    &mut bits,
+                    0,
+                    0,
+                )
+            };
+            if bitmap == 0 || bits.is_null() {
+                unsafe { let _ = DeleteDC(hdc); }
+                return None;
+            }
+
+            let family = wide("Outfit");
+            let font = unsafe {
+                CreateFontW(
+                    -logical_font.saturating_mul(SUPERSAMPLE),
+                    0,
+                    0,
+                    0,
+                    i32::from(weight),
+                    0,
+                    0,
+                    0,
+                    DEFAULT_CHARSET,
+                    OUT_DEFAULT_PRECIS,
+                    CLIP_DEFAULT_PRECIS,
+                    ANTIALIASED_QUALITY,
+                    DEFAULT_PITCH,
+                    family.as_ptr(),
+                )
+            };
+            if font == 0 {
+                unsafe {
+                    let _ = DeleteObject(bitmap as Hgdiobj);
+                    let _ = DeleteDC(hdc);
+                }
+                return None;
+            }
+
+            let old_bitmap = unsafe { SelectObject(hdc, bitmap as Hgdiobj) };
+            let old_font = unsafe { SelectObject(hdc, font as Hgdiobj) };
+            unsafe {
+                ptr::write_bytes(bits.cast::<u8>(), 0, byte_len);
+                let _ = SetBkMode(hdc, TRANSPARENT);
+                let _ = SetTextColor(hdc, 0x00FF_FFFF);
+            }
+
+            let mut utf16: Vec<u16> = text.encode_utf16().collect();
+            let mut rect = Rect {
+                left: 2 * SUPERSAMPLE,
+                top: 0,
+                right: bitmap_width - 2 * SUPERSAMPLE,
+                bottom: bitmap_height,
+            };
+            let drawn = if utf16.is_empty() {
+                0
+            } else {
+                unsafe {
+                    DrawTextW(
+                        hdc,
+                        utf16.as_mut_ptr(),
+                        utf16.len().min(i32::MAX as usize) as i32,
+                        &mut rect,
+                        DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS,
+                    )
+                }
+            };
+
+            let result = if drawn > 0 {
+                let dib = unsafe { std::slice::from_raw_parts(bits.cast::<u8>(), byte_len) };
+                let mut alpha = Vec::with_capacity((bitmap_width * bitmap_height) as usize);
+                for pixel in dib.chunks_exact(4) {
+                    alpha.push(pixel[0].max(pixel[1]).max(pixel[2]));
+                }
+                UiTexture::from_alpha(bitmap_width, bitmap_height, &alpha)
+                    .ok()
+                    .map(|texture| RasterTextTexture {
+                        texture,
+                        width: bitmap_width as f32 / SUPERSAMPLE as f32,
+                        height: bitmap_height as f32 / SUPERSAMPLE as f32,
+                    })
+            } else {
+                None
+            };
+
+            unsafe {
+                if old_font != 0 { let _ = SelectObject(hdc, old_font); }
+                if old_bitmap != 0 { let _ = SelectObject(hdc, old_bitmap); }
+                let _ = DeleteObject(font as Hgdiobj);
+                let _ = DeleteObject(bitmap as Hgdiobj);
+                let _ = DeleteDC(hdc);
+            }
+            result
+        }
+
+        fn cached(
+            &self,
+            text: &str,
+            font_px: u16,
+            max_width: f32,
+            weight: u16,
+        ) -> Option<RasterTextTexture> {
+            let max_width = max_width.round().clamp(8.0, u16::MAX as f32) as u16;
+            let key = TextCacheKey {
+                text: text.to_string(),
+                font_px,
+                max_width,
+                weight,
+            };
+            if let Some(cached) = self.cache.borrow().get(&key).copied() {
+                return Some(cached);
+            }
+            let rendered = self.rasterize(text, font_px, max_width, weight)?;
+            let mut cache = self.cache.borrow_mut();
+            if cache.len() >= 256 {
+                for (_, old) in cache.drain() {
+                    unsafe { glDeleteTextures(1, &old.texture.id); }
+                }
+            }
+            cache.insert(key, rendered);
+            Some(rendered)
+        }
+
+        fn draw(
+            &self,
+            text: &str,
+            x: f32,
+            cy: f32,
+            font_px: u16,
+            weight: u16,
+            color: [f32; 4],
+            max_width: f32,
+        ) -> f32 {
+            let Some(raster) = self.cached(text, font_px, max_width, weight) else {
+                return x;
+            };
+            textured_quad(
+                raster.texture,
+                x.round() + raster.width * 0.5,
+                cy.round(),
+                raster.width,
+                raster.height,
+                color,
+            );
+            x + raster.width
+        }
+    }
+
     struct UiTextures {
         chevron_left: UiTexture,
         play: UiTexture,
@@ -878,6 +1467,7 @@ mod win32_render_surface {
         fullscreen_enter: UiTexture,
         fullscreen_exit: UiTexture,
         volume: UiTexture,
+        audio_track: UiTexture,
         circle_small: UiTexture,
         circle_large: UiTexture,
         back_button_pill: UiTexture,
@@ -894,25 +1484,26 @@ mod win32_render_surface {
     impl UiTextures {
         fn create() -> Result<Self, String> {
             let textures = Self {
-                chevron_left: UiTexture::from_alpha(16, 16, ICON_CHEVRON_LEFT_ALPHA)?,
-                play: UiTexture::from_alpha(27, 27, ICON_PLAY_ALPHA)?,
-                pause: UiTexture::from_alpha(27, 27, ICON_PAUSE_ALPHA)?,
+                chevron_left: UiTexture::from_alpha(40, 40, ICON_CHEVRON_LEFT_ALPHA)?,
+                play: UiTexture::from_alpha(54, 54, ICON_PLAY_ALPHA)?,
+                pause: UiTexture::from_alpha(54, 54, ICON_PAUSE_ALPHA)?,
                 fullscreen_enter: UiTexture::from_alpha(
-                    25,
-                    25,
+                    50,
+                    50,
                     ICON_FULLSCREEN_ENTER_ALPHA,
                 )?,
                 fullscreen_exit: UiTexture::from_alpha(
-                    25,
-                    25,
+                    50,
+                    50,
                     ICON_FULLSCREEN_EXIT_ALPHA,
                 )?,
-                volume: UiTexture::from_alpha(29, 29, ICON_VOLUME_ALPHA)?,
-                circle_small: UiTexture::from_alpha(16, 16, CIRCLE_16_ALPHA)?,
-                circle_large: UiTexture::from_alpha(64, 64, CIRCLE_64_ALPHA)?,
+                volume: UiTexture::from_alpha(58, 58, ICON_VOLUME_ALPHA)?,
+                audio_track: UiTexture::from_alpha(50, 50, ICON_AUDIO_TRACK_ALPHA)?,
+                circle_small: UiTexture::from_alpha(32, 32, CIRCLE_16_ALPHA)?,
+                circle_large: UiTexture::from_alpha(128, 128, CIRCLE_64_ALPHA)?,
                 back_button_pill: UiTexture::from_alpha(208, 84, BACK_BUTTON_PILL_ALPHA)?,
-                text_indietro: UiTexture::from_alpha(100, 32, TEXT_INDIETRO_ALPHA)?,
-                time_glyphs: UiTexture::from_alpha(312, 40, TIME_GLYPHS_ALPHA)?,
+                text_indietro: UiTexture::from_alpha(400, 128, TEXT_INDIETRO_ALPHA)?,
+                time_glyphs: UiTexture::from_alpha(1248, 160, TIME_GLYPHS_ALPHA)?,
                 intro_boar_open: UiTexture::from_alpha(
                     1024,
                     1024,
@@ -937,7 +1528,7 @@ mod win32_render_surface {
                 intro_radial: UiTexture::from_alpha(256, 256, INTRO_RADIAL_ALPHA)?,
             };
             diagnostic_log(
-                "native_player ui_renderer=textured_svg source=webview_icons filter=linear antialias=alpha text=outfit_raster",
+                "native_player ui_renderer=textured_svg source=webview_icons_qhd filter=linear antialias=alpha_2x text=outfit_raster_8x time=atlas_4x",
             );
             diagnostic_log(
                 "native_player playback_intro_renderer=textured_svg source=webview_app_intro filter=linear antialias=alpha_rgba",
@@ -1047,6 +1638,462 @@ mod win32_render_surface {
         smooth_circle(textures, x2 - radius, cy, thickness, color);
     }
 
+    fn rounded_rect_perimeter(
+        left: f32,
+        top: f32,
+        right: f32,
+        bottom: f32,
+        radius: f32,
+    ) -> Vec<(f32, f32)> {
+        let radius = radius
+            .max(1.0)
+            .min((right - left).abs() * 0.5)
+            .min((bottom - top).abs() * 0.5);
+        let mut points = Vec::with_capacity(40);
+        let segments = (radius / 1.2).round().clamp(10.0, 24.0) as usize;
+        let push_arc = |points: &mut Vec<(f32, f32)>,
+                        cx: f32,
+                        cy: f32,
+                        start: f32,
+                        end: f32| {
+            for step in 0..=segments {
+                let t = step as f32 / segments as f32;
+                let angle = start + (end - start) * t;
+                points.push((cx + angle.cos() * radius, cy + angle.sin() * radius));
+            }
+        };
+
+        points.push((left + radius, top));
+        points.push((right - radius, top));
+        push_arc(
+            &mut points,
+            right - radius,
+            top + radius,
+            -std::f32::consts::FRAC_PI_2,
+            0.0,
+        );
+        points.push((right, bottom - radius));
+        push_arc(
+            &mut points,
+            right - radius,
+            bottom - radius,
+            0.0,
+            std::f32::consts::FRAC_PI_2,
+        );
+        points.push((left + radius, bottom));
+        push_arc(
+            &mut points,
+            left + radius,
+            bottom - radius,
+            std::f32::consts::FRAC_PI_2,
+            std::f32::consts::PI,
+        );
+        points.push((left, top + radius));
+        push_arc(
+            &mut points,
+            left + radius,
+            top + radius,
+            std::f32::consts::PI,
+            std::f32::consts::PI * 1.5,
+        );
+        points
+    }
+
+    fn filled_rounded_rect(
+        left: f32,
+        top: f32,
+        right: f32,
+        bottom: f32,
+        radius: f32,
+        color: [f32; 4],
+    ) {
+        let center_x = (left + right) * 0.5;
+        let center_y = (top + bottom) * 0.5;
+        let perimeter = rounded_rect_perimeter(left, top, right, bottom, radius);
+        unsafe {
+            glDisable(GL_TEXTURE_2D);
+            glColor4f(color[0], color[1], color[2], color[3]);
+            glBegin(GL_TRIANGLE_FAN);
+            glVertex2f(center_x, center_y);
+            for &(x, y) in &perimeter {
+                glVertex2f(x, y);
+            }
+            if let Some(&(x, y)) = perimeter.first() {
+                glVertex2f(x, y);
+            }
+            glEnd();
+        }
+    }
+
+    fn smooth_rounded_rect(
+        _textures: &UiTextures,
+        left: f32,
+        top: f32,
+        right: f32,
+        bottom: f32,
+        radius: f32,
+        color: [f32; 4],
+    ) {
+        filled_rounded_rect(left, top, right, bottom, radius, color);
+    }
+
+    fn box_blur_horizontal(source: &[u8], width: usize, height: usize, radius: usize) -> Vec<u8> {
+        if radius == 0 || width == 0 || height == 0 {
+            return source.to_vec();
+        }
+        let mut output = vec![0u8; source.len()];
+        let mut prefix = vec![0u32; width + 1];
+        for y in 0..height {
+            for channel in 0..3 {
+                prefix[0] = 0;
+                for x in 0..width {
+                    prefix[x + 1] = prefix[x]
+                        + source[(y * width + x) * 4 + channel] as u32;
+                }
+                for x in 0..width {
+                    let left = x.saturating_sub(radius);
+                    let right = (x + radius + 1).min(width);
+                    let count = (right - left).max(1) as u32;
+                    output[(y * width + x) * 4 + channel] =
+                        ((prefix[right] - prefix[left]) / count) as u8;
+                }
+            }
+            for x in 0..width {
+                output[(y * width + x) * 4 + 3] = 255;
+            }
+        }
+        output
+    }
+
+    fn box_blur_vertical(source: &[u8], width: usize, height: usize, radius: usize) -> Vec<u8> {
+        if radius == 0 || width == 0 || height == 0 {
+            return source.to_vec();
+        }
+        let mut output = vec![0u8; source.len()];
+        let mut prefix = vec![0u32; height + 1];
+        for x in 0..width {
+            for channel in 0..3 {
+                prefix[0] = 0;
+                for y in 0..height {
+                    prefix[y + 1] = prefix[y]
+                        + source[(y * width + x) * 4 + channel] as u32;
+                }
+                for y in 0..height {
+                    let top = y.saturating_sub(radius);
+                    let bottom = (y + radius + 1).min(height);
+                    let count = (bottom - top).max(1) as u32;
+                    output[(y * width + x) * 4 + channel] =
+                        ((prefix[bottom] - prefix[top]) / count) as u8;
+                }
+            }
+            for y in 0..height {
+                output[(y * width + x) * 4 + 3] = 255;
+            }
+        }
+        output
+    }
+
+    fn blurred_rgba(source: &[u8], width: usize, height: usize) -> Vec<u8> {
+        let horizontal = box_blur_horizontal(source, width, height, 13);
+        let vertical = box_blur_vertical(&horizontal, width, height, 13);
+        let horizontal = box_blur_horizontal(&vertical, width, height, 9);
+        box_blur_vertical(&horizontal, width, height, 9)
+    }
+
+    fn rounded_rect_coverage(x: f32, y: f32, width: f32, height: f32, radius: f32) -> f32 {
+        let radius = radius.max(1.0).min(width * 0.5).min(height * 0.5);
+        let qx = (x - width * 0.5).abs() - (width * 0.5 - radius);
+        let qy = (y - height * 0.5).abs() - (height * 0.5 - radius);
+        let outside_x = qx.max(0.0);
+        let outside_y = qy.max(0.0);
+        let outside = (outside_x * outside_x + outside_y * outside_y).sqrt();
+        let inside = qx.max(qy).min(0.0);
+        let distance = outside + inside - radius;
+        (0.75 - distance).clamp(0.0, 1.0)
+    }
+
+    fn create_glass_panel_texture(
+        left: f32,
+        top: f32,
+        right: f32,
+        bottom: f32,
+        viewport_width: f32,
+        viewport_height: f32,
+        radius: f32,
+    ) -> Option<(UiTexture, f32, f32)> {
+        const SAMPLE_PADDING: i32 = 34;
+        let panel_left = left.floor().max(0.0) as i32;
+        let panel_top = top.floor().max(0.0) as i32;
+        let panel_right = right.ceil().max(left.ceil()) as i32;
+        let panel_bottom = bottom.ceil().max(top.ceil()) as i32;
+        let panel_width = (panel_right - panel_left).max(2);
+        let panel_height = (panel_bottom - panel_top).max(2);
+
+        // Il blur CSS campiona anche pixel esterni al box. Leggiamo quindi una
+        // cornice extra attorno al pannello, sfocandola prima di ritagliare il
+        // rettangolo finale. Questo evita gli aloni "stirati" lungo i bordi.
+        let capture_left = (panel_left - SAMPLE_PADDING).max(0);
+        let capture_top = (panel_top - SAMPLE_PADDING).max(0);
+        let capture_right = (panel_right + SAMPLE_PADDING)
+            .min(viewport_width.ceil().max(1.0) as i32);
+        let capture_bottom = (panel_bottom + SAMPLE_PADDING)
+            .min(viewport_height.ceil().max(1.0) as i32);
+        let capture_width = (capture_right - capture_left).max(panel_width);
+        let capture_height = (capture_bottom - capture_top).max(panel_height);
+        let pixel_count = (capture_width as usize).saturating_mul(capture_height as usize);
+        let mut raw = vec![0u8; pixel_count.saturating_mul(4)];
+        let window_y = (viewport_height - capture_bottom as f32).floor().max(0.0) as i32;
+
+        unsafe {
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glReadPixels(
+                capture_left,
+                window_y,
+                capture_width,
+                capture_height,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                raw.as_mut_ptr().cast::<c_void>(),
+            );
+        }
+
+        // glReadPixels restituisce le righe dal basso verso l'alto. Portiamo il
+        // buffer in coordinate UI top-left prima del blur, così la texture finale
+        // resta orientata esattamente come il video sottostante.
+        let capture_row_bytes = capture_width as usize * 4;
+        let mut top_down = vec![0u8; raw.len()];
+        for y in 0..capture_height as usize {
+            let source_y = capture_height as usize - 1 - y;
+            top_down[y * capture_row_bytes..(y + 1) * capture_row_bytes]
+                .copy_from_slice(
+                    &raw[source_y * capture_row_bytes..(source_y + 1) * capture_row_bytes],
+                );
+        }
+
+        let blurred = blurred_rgba(
+            &top_down,
+            capture_width as usize,
+            capture_height as usize,
+        );
+        let crop_x = (panel_left - capture_left).max(0) as usize;
+        let crop_y = (panel_top - capture_top).max(0) as usize;
+        let mut glass = vec![0u8; (panel_width as usize)
+            .saturating_mul(panel_height as usize)
+            .saturating_mul(4)];
+        for y in 0..panel_height as usize {
+            let source_start = ((crop_y + y) * capture_width as usize + crop_x) * 4;
+            let destination_start = y * panel_width as usize * 4;
+            let bytes = panel_width as usize * 4;
+            glass[destination_start..destination_start + bytes]
+                .copy_from_slice(&blurred[source_start..source_start + bytes]);
+        }
+
+        let saturation = 0.82f32;
+        let brightness = 0.66f32;
+        let tint = [156.0f32, 207.0f32, 111.0f32];
+        let panel_width_f = panel_width as f32;
+        let panel_height_f = panel_height as f32;
+        for y in 0..panel_height as usize {
+            for x in 0..panel_width as usize {
+                let index = (y * panel_width as usize + x) * 4;
+                let r = glass[index] as f32;
+                let g = glass[index + 1] as f32;
+                let b = glass[index + 2] as f32;
+                let luma = r * 0.2126 + g * 0.7152 + b * 0.0722;
+                let adjust = |channel: f32| {
+                    (luma + (channel - luma) * saturation) * brightness
+                };
+
+                let yf = y as f32 / panel_height_f.max(1.0);
+                let tint_alpha = 0.15 + (1.0 - yf).clamp(0.0, 1.0) * 0.035;
+                let mut out_r = adjust(r) * (1.0 - tint_alpha) + tint[0] * tint_alpha;
+                let mut out_g = adjust(g) * (1.0 - tint_alpha) + tint[1] * tint_alpha;
+                let mut out_b = adjust(b) * (1.0 - tint_alpha) + tint[2] * tint_alpha;
+
+                // Solo un riflesso verticale leggerissimo, senza bloom centrale,
+                // vignettatura o stroke che generavano fasce/aloni percepibili.
+                let highlight = (1.0 - (y as f32 / 96.0)).clamp(0.0, 1.0) * 0.018;
+                out_r = out_r * (1.0 - highlight) + 255.0 * highlight;
+                out_g = out_g * (1.0 - highlight) + 255.0 * highlight;
+                out_b = out_b * (1.0 - highlight) + 255.0 * highlight;
+
+                glass[index] = out_r.clamp(0.0, 255.0) as u8;
+                glass[index + 1] = out_g.clamp(0.0, 255.0) as u8;
+                glass[index + 2] = out_b.clamp(0.0, 255.0) as u8;
+
+                // 4 campioni sub-pixel per un bordo del pannello più fine.
+                let mut coverage = 0.0f32;
+                for (ox, oy) in [(0.25f32, 0.25f32), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
+                    coverage += rounded_rect_coverage(
+                        x as f32 + ox,
+                        y as f32 + oy,
+                        panel_width_f,
+                        panel_height_f,
+                        radius,
+                    );
+                }
+                glass[index + 3] = ((coverage * 0.25) * 255.0).round() as u8;
+            }
+        }
+
+        UiTexture::from_rgba(panel_width, panel_height, &glass)
+            .ok()
+            .map(|texture| (texture, panel_width as f32, panel_height as f32))
+    }
+
+    fn destroy_texture(texture: UiTexture) {
+        unsafe { glDeleteTextures(1, &texture.id); }
+    }
+
+    fn draw_audio_track_menu(
+        _textures: &UiTextures,
+        text_renderer: &UiTextRenderer,
+        state: &super::RenderUiState,
+        width: f32,
+        height: f32,
+    ) {
+        if !state.audio_menu_open || state.audio_tracks.is_empty() {
+            return;
+        }
+
+        let layout = audio_menu_layout(width, height, state);
+        let panel_left = layout.left.round();
+        let panel_top = layout.top.round();
+        let panel_right = (layout.left + layout.width).round();
+        let panel_bottom = layout.bottom().round();
+        let panel_width = (panel_right - panel_left).max(1.0);
+        let panel_height = (panel_bottom - panel_top).max(1.0);
+        let radius = 18.0;
+
+        // Il readback viene eseguito PRIMA di disegnare ombra e pannello: in
+        // questo modo il blur contiene solo il frame video/UI sottostante e non
+        // ricampiona il menu stesso o la sua shadow.
+        let glass_panel = create_glass_panel_texture(
+            panel_left,
+            panel_top,
+            panel_right,
+            panel_bottom,
+            width,
+            height,
+            radius,
+        );
+
+        if let Some((glass_texture, glass_width, glass_height)) = glass_panel {
+            textured_quad(
+                glass_texture,
+                panel_left + panel_width * 0.5,
+                panel_top + panel_height * 0.5,
+                glass_width,
+                glass_height,
+                [1.0, 1.0, 1.0, 1.0],
+            );
+            destroy_texture(glass_texture);
+        } else {
+            // Fallback solo se il readback GPU fallisce: manteniamo comunque una
+            // superficie glass coerente, senza ombra esterna.
+            filled_rounded_rect(
+                panel_left,
+                panel_top,
+                panel_right,
+                panel_bottom,
+                radius,
+                [62.0 / 255.0, 82.0 / 255.0, 48.0 / 255.0, 0.90],
+            );
+        }
+
+        // Il tint/riflesso è già incorporato nella texture glass: nessun layer
+        // aggiuntivo sopra o sotto, così non compaiono più fasce o aloni separati.
+
+        let text_left = panel_left + 16.0;
+        let title_y = (panel_top + layout.header_height * 0.5).round();
+        let _ = text_renderer.draw(
+            "Tracce audio",
+            text_left,
+            title_y,
+            15,
+            650,
+            [1.0, 1.0, 1.0, 0.98],
+            layout.width - 48.0,
+        );
+
+        let rows_left = panel_left + 8.0;
+        let rows_right = panel_right - 8.0;
+        let end = (layout.start_index + layout.visible_rows).min(state.audio_tracks.len());
+        for (visible_index, track_index) in (layout.start_index..end).enumerate() {
+            let track = &state.audio_tracks[track_index];
+            let row_top = layout.row_top(visible_index).round();
+            let row_bottom = (row_top + layout.row_height).round();
+            let row_center = (row_top + layout.row_height * 0.5).round();
+            let hovered = state.audio_menu_hover == Some(track_index);
+
+            if track.selected {
+                // Bordo interno + fill: stessa ricetta CSS del pannello Filtri.
+                filled_rounded_rect(
+                    rows_left,
+                    row_top + 3.0,
+                    rows_right,
+                    row_bottom - 3.0,
+                    9.0,
+                    [1.0, 1.0, 1.0, 0.08],
+                );
+                filled_rounded_rect(
+                    rows_left + 1.0,
+                    row_top + 4.0,
+                    rows_right - 1.0,
+                    row_bottom - 4.0,
+                    8.0,
+                    [226.0 / 255.0, 242.0 / 255.0, 207.0 / 255.0, 0.16],
+                );
+            } else if hovered {
+                filled_rounded_rect(
+                    rows_left,
+                    row_top + 3.0,
+                    rows_right,
+                    row_bottom - 3.0,
+                    9.0,
+                    [1.0, 1.0, 1.0, 0.10],
+                );
+            }
+
+            let label_left = rows_left + 14.0;
+            let label_width = (rows_right - label_left - 10.0).max(36.0);
+            let _ = text_renderer.draw(
+                &track.label,
+                label_left,
+                row_center,
+                14,
+                if track.selected { 620 } else { 520 },
+                [1.0, 1.0, 1.0, if track.selected { 1.0 } else { 0.92 }],
+                label_width,
+            );
+        }
+
+        // Indicatori di scroll anch'essi rasterizzati con il font nativo GDI:
+        // niente più caratteri presi dall'atlas a bassa risoluzione.
+        if layout.start_index > 0 {
+            let _ = text_renderer.draw(
+                "^",
+                panel_right - 24.0,
+                panel_top + 16.0,
+                11,
+                600,
+                [1.0, 1.0, 1.0, 0.66],
+                14.0,
+            );
+        }
+        if end < state.audio_tracks.len() {
+            let _ = text_renderer.draw(
+                "v",
+                panel_right - 24.0,
+                panel_bottom - 14.0,
+                11,
+                600,
+                [1.0, 1.0, 1.0, 0.66],
+                14.0,
+            );
+        }
+    }
+
     fn time_string(seconds: f64) -> String {
         let safe = if seconds.is_finite() { seconds.max(0.0).floor() as u64 } else { 0 };
         let hours = safe / 3600;
@@ -1120,17 +2167,17 @@ mod win32_render_surface {
         let remaining = (duration.max(0.0) - current.max(0.0)).max(0.0);
         let remaining_text = format!("-{}", time_string(remaining));
         let total_text = time_string(duration);
-        // Raster vicino alla dimensione finale + coordinate pixel-snapped:
-        // evita la minificazione ~10x del vecchio atlas 160px, che con il solo
-        // bilinear filtering di OpenGL 1.1 produceva alias/pixel visibili.
-        let font_size = (width * 0.0125).clamp(12.0, 16.0).round();
-        let box_height = (font_size * 1.16).round();
-        let gap = (font_size * 0.50).round();
+
+        // Atlas 4x (1248x160) derivato da Outfit: niente texture testuale enorme
+        // con larghezza max fissa, quindi spacing stabile e numeri più nitidi.
+        let font_size = (width * 0.0125).clamp(13.0, 17.0).round();
+        let box_height = (font_size * 1.20).round();
+        let gap = (font_size * 0.42).round();
         let left = left.round();
         let cy = cy.round();
         let shadow = [0.0, 0.0, 0.0, 0.88];
         let white = [1.0, 1.0, 1.0, 1.0];
-        let separator = [1.0, 1.0, 1.0, 0.62];
+        let separator = [1.0, 1.0, 1.0, 0.64];
 
         let draw = |y: f32, text_color: [f32; 4], separator_color: [f32; 4]| {
             let mut x = left;
@@ -1141,7 +2188,7 @@ mod win32_render_surface {
             let _ = draw_time_run(textures, &total_text, x, y, box_height, text_color);
         };
 
-        draw(cy + 2.0, shadow, shadow);
+        draw(cy + 1.0, shadow, shadow);
         draw(cy, white, separator);
     }
 
@@ -1328,6 +2375,9 @@ mod win32_render_surface {
         width: i32,
         height: i32,
         ui_textures: UiTextures,
+        ui_text_renderer: UiTextRenderer,
+        swap_count: Cell<u64>,
+        swap_failures: Cell<u64>,
         _bridge: Box<InputBridge>,
     }
 
@@ -1423,6 +2473,21 @@ mod win32_render_surface {
                 }
                 return Err("Configurazione pixel format OpenGL fallita.".to_string());
             }
+            let mut actual_pfd = PixelFormatDescriptor {
+                n_size: mem::size_of::<PixelFormatDescriptor>() as u16,
+                n_version: 1,
+                ..PixelFormatDescriptor::default()
+            };
+            let pixel_format_described = unsafe {
+                DescribePixelFormat(
+                    hdc,
+                    format,
+                    mem::size_of::<PixelFormatDescriptor>() as u32,
+                    &mut actual_pfd,
+                )
+            } != 0;
+            let double_buffered = pixel_format_described
+                && (actual_pfd.dw_flags & PFD_DOUBLEBUFFER) != 0;
 
             let glrc = unsafe { wglCreateContext(hdc) };
             if glrc == 0 {
@@ -1452,6 +2517,39 @@ mod win32_render_surface {
                 return Err("Impossibile caricare opengl32.dll.".to_string());
             }
 
+            // Phase 6B.7.3.5: il compositor Chromium/WebView beneficiava gia della
+            // presentazione sincronizzata dal DWM; il nuovo child surface WGL invece
+            // non aveva mai richiesto esplicitamente un intervallo di swap. Senza
+            // WGL_EXT_swap_control il driver puo presentare durante lo scanout e
+            // produrre la classica linea di tearing mobile.
+            let swap_interval_address = unsafe { wgl_extension_proc(b"wglSwapIntervalEXT\0") };
+            let swap_control_available = !swap_interval_address.is_null();
+            let swap_interval_result = if swap_control_available {
+                let set_swap_interval: WglSwapIntervalExt = unsafe { mem::transmute(swap_interval_address) };
+                if unsafe { set_swap_interval(1) } != 0 {
+                    "ok"
+                } else {
+                    "failed"
+                }
+            } else {
+                "unsupported"
+            };
+            let get_swap_interval_address = unsafe { wgl_extension_proc(b"wglGetSwapIntervalEXT\0") };
+            let swap_interval_actual = if get_swap_interval_address.is_null() {
+                None
+            } else {
+                let get_swap_interval: WglGetSwapIntervalExt =
+                    unsafe { mem::transmute(get_swap_interval_address) };
+                Some(unsafe { get_swap_interval() })
+            };
+            diagnostic_log(format!(
+                "native_player render_vsync backend=wgl double_buffer={} swap_control_available={} swap_interval_requested=1 swap_interval_result={} swap_interval_actual={:?}",
+                double_buffered,
+                swap_control_available,
+                swap_interval_result,
+                swap_interval_actual,
+            ));
+
             let ui_textures = match UiTextures::create() {
                 Ok(textures) => textures,
                 Err(error) => {
@@ -1466,6 +2564,8 @@ mod win32_render_surface {
                 }
             };
 
+            let ui_text_renderer = UiTextRenderer::create();
+
             diagnostic_log(format!(
                 "native_player render_surface=create backend=wgl compositor=native hwnd={} width={} height={} message_loop=render_thread",
                 hwnd, width, height
@@ -1479,6 +2579,9 @@ mod win32_render_surface {
                 width,
                 height,
                 ui_textures,
+                ui_text_renderer,
+                swap_count: Cell::new(0),
+                swap_failures: Cell::new(0),
                 _bridge: bridge,
             }))
         }
@@ -1574,12 +2677,9 @@ mod win32_render_surface {
                 return;
             }
 
-            quad(0.0, 0.0, width, 88.0, [0.0, 0.0, 0.0, 0.34]);
-
-            // Indietro come nel WebView: pill 42px, fondo rgba(20,20,20,.52),
-            // icona 20px e label Outfit. Il fondo è UNA sola maschera AA: la vecchia
-            // costruzione con quad + quattro cerchi traslucidi sommava l'alpha nelle
-            // giunzioni e generava i blocchi/aloni visibili nello screenshot.
+            // Indietro: rettangolo 104x42 con raggio 10px, coerente con il
+            // controllo della schermata dettaglio film. Maschera AA ad alta qualità,
+            // icona e label da sorgenti raster 2x/4x per evitare scalettature.
             let back_left = (width * 0.024).clamp(16.0, 38.0).round();
             let back_top = 14.0;
             let back_width = 104.0;
@@ -1713,6 +2813,32 @@ mod win32_render_surface {
                 [1.0, 1.0, 1.0, 0.96],
             );
 
+            // Tracce audio: pulsante gemello del fullscreen, immediatamente a
+            // sinistra. L'icona SVG e rasterizzata offline come il resto della UI
+            // nativa, senza dipendenze runtime dalla WebView.
+            if !state.audio_tracks.is_empty() {
+                let (audio_x, audio_y) = audio_button_center(width, height);
+                smooth_circle(
+                    &self.ui_textures,
+                    audio_x,
+                    audio_y,
+                    AUDIO_BUTTON_DIAMETER,
+                    if state.audio_menu_open {
+                        [0.22, 0.29, 0.16, 0.88]
+                    } else {
+                        [0.071, 0.071, 0.071, 0.52]
+                    },
+                );
+                textured_quad(
+                    self.ui_textures.audio_track,
+                    audio_x,
+                    audio_y,
+                    25.0,
+                    25.0,
+                    [1.0, 1.0, 1.0, 0.98],
+                );
+            }
+
             // Fullscreen: stesso pulsante 52x52 e stessa icona 25x25 del WebView.
             let fullscreen_x = width - 54.0;
             let fullscreen_y = height - 52.0;
@@ -1737,11 +2863,32 @@ mod win32_render_surface {
                 [1.0, 1.0, 1.0, 0.98],
             );
 
+            // Disegnato per ultimo come i dropdown WebView: il pannello resta sopra
+            // seekbar e controlli, senza toccare il frame video sottostante.
+            draw_audio_track_menu(
+                &self.ui_textures,
+                &self.ui_text_renderer,
+                state,
+                width,
+                height,
+            );
+
             unsafe { glDisable(GL_BLEND); }
         }
 
-        pub fn swap(&self) {
-            unsafe { let _ = SwapBuffers(self.hdc); }
+        pub fn swap(&self) -> bool {
+            let result = unsafe { SwapBuffers(self.hdc) };
+            self.swap_count.set(self.swap_count.get().saturating_add(1));
+            if result == 0 {
+                let failures = self.swap_failures.get().saturating_add(1);
+                self.swap_failures.set(failures);
+                if failures == 1 {
+                    diagnostic_log("native_player render_vsync event=swap_failed backend=wgl");
+                }
+                false
+            } else {
+                true
+            }
         }
 
         pub unsafe extern "C" fn get_proc_address(ctx: *mut c_void, name: *const c_char) -> *mut c_void {
@@ -1761,6 +2908,11 @@ mod win32_render_surface {
 
     impl Drop for RenderSurface {
         fn drop(&mut self) {
+            diagnostic_log(format!(
+                "native_player render_vsync summary backend=wgl swaps={} swap_failures={}",
+                self.swap_count.get(),
+                self.swap_failures.get(),
+            ));
             unsafe {
                 let _ = SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
                 let _ = wglMakeCurrent(0, 0);
@@ -1794,7 +2946,7 @@ mod win32_render_surface {
         pub fn resize_to_parent(&mut self) -> Result<bool, String> { Ok(false) }
         pub fn dimensions(&self) -> (i32, i32) { (1, 1) }
         pub fn draw_baia_controls(&self, _state: &super::RenderUiState) {}
-        pub fn swap(&self) {}
+        pub fn swap(&self) -> bool { false }
         pub unsafe extern "C" fn get_proc_address(_ctx: *mut c_void, _name: *const c_char) -> *mut c_void {
             std::ptr::null_mut()
         }
@@ -2176,6 +3328,122 @@ impl MpvApi {
         let command_name = values.first().map(String::as_str).unwrap_or("<empty>");
         self.check(code, &format!("Comando libmpv fallito command={command_name}"))
     }
+}
+
+fn audio_language_label(code: &str) -> Option<&'static str> {
+    match code.trim().to_ascii_lowercase().as_str() {
+        "it" | "ita" => Some("Italiano"),
+        "en" | "eng" => Some("English"),
+        "fr" | "fra" | "fre" => Some("Français"),
+        "de" | "deu" | "ger" => Some("Deutsch"),
+        "es" | "spa" => Some("Español"),
+        "pt" | "por" => Some("Português"),
+        "ja" | "jpn" => Some("Japanese"),
+        "ko" | "kor" => Some("Korean"),
+        "zh" | "zho" | "chi" => Some("Chinese"),
+        "ru" | "rus" => Some("Russian"),
+        _ => None,
+    }
+}
+
+fn sanitize_audio_track_label(value: &str) -> String {
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let max_chars = 48usize;
+    if compact.chars().count() <= max_chars {
+        compact
+    } else {
+        let mut shortened = compact
+            .chars()
+            .take(max_chars.saturating_sub(3))
+            .collect::<String>();
+        shortened.push_str("...");
+        shortened
+    }
+}
+
+fn mpv_audio_tracks(api: &MpvApi, handle: *mut c_void) -> Vec<AudioTrackInfo> {
+    let count = api
+        .get_property(handle, "track-list/count")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0)
+        .min(128);
+    let selected_aid = api
+        .get_property(handle, "aid")
+        .and_then(|value| value.parse::<i64>().ok());
+    let mut tracks = Vec::new();
+
+    for index in 0..count {
+        let property = |suffix: &str| {
+            api.get_property(handle, &format!("track-list/{index}/{suffix}"))
+        };
+        if property("type").as_deref() != Some("audio") {
+            continue;
+        }
+        let Some(id) = property("id").and_then(|value| value.parse::<i64>().ok()) else {
+            continue;
+        };
+        let title = property("title")
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let lang = property("lang")
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let codec = property("codec")
+            .map(|value| value.trim().to_ascii_uppercase())
+            .filter(|value| !value.is_empty());
+        let selected = property("selected")
+            .is_some_and(|value| matches!(value.as_str(), "yes" | "true" | "1"))
+            || selected_aid == Some(id);
+
+        let ordinal = tracks.len() + 1;
+        let base = title.clone().unwrap_or_else(|| {
+            lang.as_deref()
+                .and_then(audio_language_label)
+                .map(str::to_string)
+                .or_else(|| lang.as_ref().map(|value| value.to_ascii_uppercase()))
+                .unwrap_or_else(|| format!("Traccia {ordinal}"))
+        });
+        let mut parts = vec![base];
+        if title.is_some() {
+            if let Some(lang) = lang.as_deref() {
+                let readable = audio_language_label(lang)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| lang.to_ascii_uppercase());
+                if !parts[0].to_ascii_lowercase().contains(&readable.to_ascii_lowercase()) {
+                    parts.push(readable);
+                }
+            }
+        }
+        if let Some(codec) = codec {
+            parts.push(codec);
+        }
+
+        tracks.push(AudioTrackInfo {
+            id,
+            label: sanitize_audio_track_label(&parts.join(" · ")),
+            selected,
+        });
+    }
+
+    tracks
+}
+
+fn sync_audio_tracks_to_ui(
+    api: &MpvApi,
+    handle: *mut c_void,
+    render_shared: &RenderShared,
+    reason: &str,
+) -> Vec<AudioTrackInfo> {
+    let tracks = mpv_audio_tracks(api, handle);
+    let selected = tracks.iter().find(|track| track.selected).map(|track| track.id);
+    render_shared.update(|ui| ui.set_audio_tracks(tracks.clone()));
+    diagnostic_log(format!(
+        "native_player audio_tracks=refresh reason={} count={} selected={:?}",
+        reason,
+        tracks.len(),
+        selected,
+    ));
+    tracks
 }
 
 fn mpv_end_file_reason_name(reason: i32) -> &'static str {
@@ -2934,8 +4202,9 @@ fn render_thread_main(
                 if code >= 0 {
                     let ui = shared.snapshot();
                     surface.draw_baia_controls(&ui);
-                    surface.swap();
-                    unsafe { (api.context_report_swap)(render_context) };
+                    if surface.swap() {
+                        unsafe { (api.context_report_swap)(render_context) };
+                    }
                     if !rendered_once {
                         rendered_once = true;
                         diagnostic_log(format!(
@@ -2975,7 +4244,7 @@ fn update_render_state_from_snapshot(state: &NativePlaybackState, shared: &Rende
         if let Some(volume) = state.volume {
             ui.volume = volume.clamp(0.0, 100.0);
         }
-        if ui.seek_preview.is_some() && !state.seeking {
+        if ui.seek_preview.is_some() && !ui.seek_drag_active && !state.seeking {
             ui.seek_preview = None;
         }
     });
@@ -3345,6 +4614,8 @@ fn player_worker(
     let mut surface_seek_dispatched_at: Option<Instant> = None;
     let mut last_surface_seek_target: Option<f64> = None;
     let mut pending_surface_seek: Option<PendingSurfaceSeek> = None;
+    let mut preferred_audio_track_id: Option<i64> = None;
+    let mut audio_track_switches: u64 = 0;
 
     while running {
         match receiver.recv_timeout(EVENT_POLL_INTERVAL) {
@@ -3379,6 +4650,8 @@ fn player_worker(
                     surface_seek_dispatched_at = None;
                     last_surface_seek_target = None;
                     pending_surface_seek = None;
+                    preferred_audio_track_id = None;
+                    audio_track_switches = 0;
                     let intro_started = Instant::now();
                     let intro_visual_started = intro_started + PLAYBACK_INTRO_AUDIO_LEAD;
                     playback_intro_started = Some(intro_started);
@@ -3397,6 +4670,10 @@ fn player_worker(
                         ui.intro_visible = true;
                         ui.controls_visible = true;
                         ui.controls_hide_at = None;
+                        ui.audio_tracks.clear();
+                        ui.audio_menu_open = false;
+                        ui.audio_menu_hover = None;
+                        ui.audio_menu_scroll = 0;
                         // Il compositor tiene il primo frame fermo per 250ms: il
                         // soundtrack resta leggermente avanti senza il mezzo secondo
                         // di anticipo che risultava eccessivo.
@@ -3814,6 +5091,43 @@ fn player_worker(
                         )),
                     }
                 }
+                SurfaceAction::SelectAudioTrack(track_id) => {
+                    match api.set_property(handle, "aid", &track_id.to_string()) {
+                        Ok(()) => {
+                            preferred_audio_track_id = Some(track_id);
+                            audio_track_switches = audio_track_switches.saturating_add(1);
+                            let mut tracks =
+                                sync_audio_tracks_to_ui(&api, handle, &render_shared, "selection");
+                            for track in &mut tracks {
+                                track.selected = track.id == track_id;
+                            }
+                            render_shared.update(|ui| ui.set_audio_tracks(tracks.clone()));
+                            let selected_label = tracks
+                                .iter()
+                                .find(|track| track.id == track_id)
+                                .map(|track| track.label.as_str())
+                                .unwrap_or("unknown");
+                            diagnostic_log(format!(
+                                "native_player ui_action=audio_track id={} label={} switches={}",
+                                track_id,
+                                selected_label.replace(' ', "_"),
+                                audio_track_switches,
+                            ));
+                        }
+                        Err(error) => {
+                            let _ = sync_audio_tracks_to_ui(
+                                &api,
+                                handle,
+                                &render_shared,
+                                "selection_error",
+                            );
+                            diagnostic_log(format!(
+                                "native_player ui_action=error action=audio_track id={} error={}",
+                                track_id, error
+                            ));
+                        }
+                    }
+                }
                 SurfaceAction::ToggleFullscreen => {
                     if let Some(window) = app.get_window(MAIN_WINDOW_LABEL) {
                         let current = window.is_fullscreen().unwrap_or(false);
@@ -3914,6 +5228,20 @@ fn player_worker(
                         .map(|started| started.elapsed().as_millis())
                         .unwrap_or(0),
                 ));
+                if let Some(track_id) = preferred_audio_track_id {
+                    if let Err(error) = api.set_property(handle, "aid", &track_id.to_string()) {
+                        diagnostic_log(format!(
+                            "native_player audio_track=restore_error id={} error={}",
+                            track_id, error
+                        ));
+                    } else {
+                        diagnostic_log(format!(
+                            "native_player audio_track=restored id={} reason=file_loaded",
+                            track_id
+                        ));
+                    }
+                }
+                let _ = sync_audio_tracks_to_ui(&api, handle, &render_shared, "file_loaded");
                 if !webview_hidden {
                     webview_hidden = set_main_webview_visible(&app, false, "file_loaded_native_compositor");
                 }
@@ -4527,7 +5855,7 @@ fn player_worker(
             0.0
         };
         diagnostic_log(format!(
-            "native_player transport_summary remote_requests={} bytes_requested={} bytes_received={} bytes_served={} useful_ratio={:.3} cache_hits={} cache_misses={} cache_seek_hits={} seek_cache_misses={} seeks={} generation={} metadata_ms={} first_range_headers_ms={} first_range_body_ms={} first_range_elapsed_ms={} avg_headers_ms={:.1} avg_body_ms={:.1} avg_range_ms={:.1} max_range_ms={} blocking_fetches={} avg_blocking_fetch_ms={:.1} blocking_fetch_ms_total={} blocking_fetch_ms_max={} slow_250={} slow_500={} slow_1000={} seek_distance_bytes_total={} seek_distance_bytes_max={} max_range_bytes={} window_bytes={} reservoir_low_bytes={} reservoir_high_bytes={} reservoir_depth_bytes={} reservoir_depth_peak_bytes={} cache_peak_bytes={} cache_segments={} cache_peak_segments={} cache_evictions={} cache_evicted_bytes={} cache_preserved_miss_bytes={} cache_preserved_miss_segments={} prefetch_requests={} prefetch_hits={} prefetch_waits={} prefetch_wait_ms_total={} prefetch_wait_ms_max={} prefetch_wait_extensions={} prefetch_fallbacks={} prefetch_fallback_stalled={} prefetch_fallback_hard={} prefetch_cancelled={} prefetch_stale_results={} prefetch_errors={} prefetch_bytes_discarded={} reservoir_refills={} reservoir_ranges_scheduled={} reservoir_ranges_completed={} reservoir_bytes_completed={} read_calls={} true_eof_reads={} non_eof_zero_reads_prevented={} non_eof_zero_read_failures={} last_non_eof_zero_position={} last_non_eof_zero_remaining={} last_non_eof_zero_generation={} last_read_position={} last_read_requested={} last_read_returned={} last_read_remaining={} source_size={} seek_to_eof_count={} last_seek_offset={} last_seek_previous_position={} premature_end_files={} end_file_recoveries={} end_file_recovery_failures={} user_seek_commands={} exact_end_seek_commands={} coalesced_seek_inputs={} coalesced_seek_dispatches={} end_file_seek_correlations={} premature_end_seek_correlations={} cache_pause_count={} cache_pause_total_ms={} cache_pause_max_ms={}",
+            "native_player transport_summary remote_requests={} bytes_requested={} bytes_received={} bytes_served={} useful_ratio={:.3} cache_hits={} cache_misses={} cache_seek_hits={} seek_cache_misses={} seeks={} generation={} metadata_ms={} first_range_headers_ms={} first_range_body_ms={} first_range_elapsed_ms={} avg_headers_ms={:.1} avg_body_ms={:.1} avg_range_ms={:.1} max_range_ms={} blocking_fetches={} avg_blocking_fetch_ms={:.1} blocking_fetch_ms_total={} blocking_fetch_ms_max={} slow_250={} slow_500={} slow_1000={} seek_distance_bytes_total={} seek_distance_bytes_max={} max_range_bytes={} window_bytes={} reservoir_low_bytes={} reservoir_high_bytes={} reservoir_depth_bytes={} reservoir_depth_peak_bytes={} cache_peak_bytes={} cache_segments={} cache_peak_segments={} cache_evictions={} cache_evicted_bytes={} cache_preserved_miss_bytes={} cache_preserved_miss_segments={} prefetch_requests={} prefetch_hits={} prefetch_waits={} prefetch_wait_ms_total={} prefetch_wait_ms_max={} prefetch_wait_extensions={} prefetch_fallbacks={} prefetch_fallback_stalled={} prefetch_fallback_hard={} prefetch_cancelled={} prefetch_stale_results={} prefetch_errors={} prefetch_bytes_discarded={} reservoir_refills={} reservoir_ranges_scheduled={} reservoir_ranges_completed={} reservoir_bytes_completed={} read_calls={} true_eof_reads={} non_eof_zero_reads_prevented={} non_eof_zero_read_failures={} last_non_eof_zero_position={} last_non_eof_zero_remaining={} last_non_eof_zero_generation={} last_read_position={} last_read_requested={} last_read_returned={} last_read_remaining={} source_size={} seek_to_eof_count={} last_seek_offset={} last_seek_previous_position={} premature_end_files={} end_file_recoveries={} end_file_recovery_failures={} user_seek_commands={} exact_end_seek_commands={} coalesced_seek_inputs={} coalesced_seek_dispatches={} audio_track_switches={} end_file_seek_correlations={} premature_end_seek_correlations={} cache_pause_count={} cache_pause_total_ms={} cache_pause_max_ms={}",
             stats.remote_requests,
             stats.bytes_requested,
             stats.bytes_received,
@@ -4608,6 +5936,7 @@ fn player_worker(
             exact_end_seek_commands,
             coalesced_seek_inputs,
             coalesced_seek_dispatches,
+            audio_track_switches,
             end_file_seek_correlations,
             premature_end_seek_correlations,
             cache_pause_count,

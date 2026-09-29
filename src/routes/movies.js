@@ -268,8 +268,10 @@ router.get('/home', (req, res) => {
   const recentIds = new Set(recent.map((movie) => movie.id));
   const latest = buildLatestArrivals(movies, HOME_LATEST_LIMIT);
   const recommended = buildRecommendations(movies, profileKey, recentIds, HOME_RECOMMENDED_LIMIT);
+  const random = randomSample(movies, 30);
 
-  res.json({ recent, latest, recommended });
+  res.set('Cache-Control', 'no-store');
+  res.json({ recent, latest, recommended, random });
 });
 
 router.get('/:id/similar', (req, res) => {

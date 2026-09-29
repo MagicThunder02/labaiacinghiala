@@ -16,6 +16,11 @@
   --cover-hover-glow: 0 0 18px 6px rgba(255, 255, 255, .88);
 }
 * { box-sizing: border-box; }
+
+/* La pagina resta scrollabile con rotella/trackpad, ma senza la barra verticale laterale. */
+html, body { scrollbar-width: none; -ms-overflow-style: none; }
+html::-webkit-scrollbar, body::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
 html, body { min-height: 100%; }
 body {
   margin: 0;

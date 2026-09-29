@@ -184,7 +184,7 @@ test('Phase 6B.4.5 evita riapertura sintetica dei controlli e protegge lo snapsh
   assert.match(nativePlayer, /POINTER_MOVE_WAKE_THRESHOLD: f32 = 2\.0/);
   assert.match(nativePlayer, /last_pointer: Mutex<Option<\(f32, f32\)>>/);
   assert.match(nativePlayer, /let _ = self\.remember_pointer\(x, y\);/);
-  assert.match(nativePlayer, /DragMode::None => \{[\s\S]{0,500}if self\.remember_pointer\(x, y\)/);
+  assert.match(nativePlayer, /DragMode::None => \{[\s\S]{0,1200}if self\.remember_pointer\(x, y\)/);
 
   assert.match(nativePlayer, /let terminal_idle = state\.idle/);
   assert.match(nativePlayer, /if terminal_idle \|\| state\.time_pos\.is_none\(\)/);
@@ -653,4 +653,51 @@ test('Phase 6B.7.3.4 usa seek exact vicino alla fine e coalescing durante seekin
   assert.match(analyzer, /lastSeekCorrelationMode/);
   assert.match(analyzer, /lastSeekCorrelationSeekingBefore/);
   assert.match(analyzer, /lastSeekCorrelationSeekingAtEnd/);
+});
+
+test('Phase 6B.7.3.5 abilita VSync WGL esplicito e segnala lo swap reale a libmpv', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+
+  assert.match(nativePlayer, /PFD_DOUBLEBUFFER/);
+  assert.match(nativePlayer, /DescribePixelFormat/);
+  assert.match(nativePlayer, /type WglSwapIntervalExt = unsafe extern "system" fn\(interval: i32\) -> Bool/);
+  assert.match(nativePlayer, /wglSwapIntervalEXT\\0/);
+  assert.match(nativePlayer, /set_swap_interval\(1\)/);
+  assert.match(nativePlayer, /render_vsync backend=wgl double_buffer=\{\} swap_control_available=\{\} swap_interval_requested=1/);
+  assert.match(nativePlayer, /pub fn swap\(&self\) -> bool/);
+  assert.match(nativePlayer, /if surface\.swap\(\) \{\s*unsafe \{ \(api\.context_report_swap\)\(render_context\) \};\s*\}/);
+  assert.match(nativePlayer, /render_vsync summary backend=wgl swaps=\{\} swap_failures=\{\}/);
+});
+
+
+test('Phase 6B.7.3.6 espone le tracce audio libmpv nel compositor nativo Baia', () => {
+  const nativePlayer = read('src-tauri/src/native_player.rs');
+  const analyzer = read('scripts/analyze-native-player-transport.js');
+  const audioSvg = read('public/icons/audio-track.svg');
+  const audioAlpha = fs.statSync(path.join(ROOT, 'src-tauri/src/native_player_assets/audio-track-25.alpha'));
+  const textAtlas = fs.statSync(path.join(ROOT, 'src-tauri/src/native_player_assets/ui-text-glyphs-512x320.alpha'));
+
+  assert.match(nativePlayer, /SelectAudioTrack\(i64\)/);
+  assert.match(nativePlayer, /track-list\/count/);
+  assert.match(nativePlayer, /track-list\/\{index\}\/\{suffix\}/);
+  assert.match(nativePlayer, /property\("type"\)\.as_deref\(\) != Some\("audio"\)/);
+  assert.match(nativePlayer, /api\.set_property\(handle, "aid", &track_id\.to_string\(\)\)/);
+  assert.match(nativePlayer, /audio_menu_open/);
+  assert.match(nativePlayer, /WM_MOUSEWHEEL/);
+  assert.match(nativePlayer, /"Tracce audio"/);
+  assert.match(nativePlayer, /audio-track-25\.alpha/);
+  assert.match(nativePlayer, /ui-text-glyphs-512x320\.alpha/);
+  assert.match(nativePlayer, /preferred_audio_track_id/);
+  assert.match(nativePlayer, /audio_track=restored id=\{\} reason=file_loaded/);
+  assert.match(nativePlayer, /audio_track_switches=\{\}/);
+  assert.match(analyzer, /audioTrackSwitches/);
+
+  assert.equal(audioAlpha.size, 25 * 25);
+  assert.equal(textAtlas.size, 512 * 320);
+  assert.match(audioSvg, /viewBox="0 0 24 24"/);
+  assert.match(audioSvg, /<path\s+d=/);
+
+  // Il selettore resta parte del compositor Baia e non riabilita UI/embedding mpv legacy.
+  assert.doesNotMatch(nativePlayer, /api\.set_option\(handle, "osc", "yes"\)/);
+  assert.doesNotMatch(nativePlayer, /api\.set_option\(handle, "wid"/);
 });

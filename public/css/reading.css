@@ -94,6 +94,15 @@
 }
 .reading-grid .reading-card { width: 100%; max-width: 190px; }
 
+
+/* Random picks: mini-catalogo a griglia, più compatto del catalogo completo. */
+.random-picks-grid.reading-grid {
+  grid-template-columns: repeat(auto-fill, minmax(clamp(108px, 9.5vw, 148px), 1fr));
+  gap: clamp(17px, 2vw, 25px) clamp(11px, 1.4vw, 17px);
+  align-items: start;
+}
+.random-picks-grid.reading-grid .reading-card { max-width: 160px; }
+
 /* Reader */
 .reading-reader {
   position: fixed;

@@ -26,6 +26,16 @@ const HOME_RECENT_LIMIT = 10;
 const HOME_LATEST_LIMIT = 20;
 const HOME_RECOMMENDED_LIMIT = 30;
 
+function randomSample(items, limit) {
+  const pool = [...items];
+  const selectedCount = Math.min(Math.max(Number(limit) || 0, 0), pool.length);
+  for (let index = 0; index < selectedCount; index += 1) {
+    const swapIndex = index + Math.floor(Math.random() * (pool.length - index));
+    [pool[index], pool[swapIndex]] = [pool[swapIndex], pool[index]];
+  }
+  return pool.slice(0, selectedCount);
+}
+
 const selectColumns = `
   SELECT
     r.id,
@@ -169,6 +179,8 @@ router.get('/home', (req, res) => {
     latestLimit: HOME_LATEST_LIMIT,
     recommendedLimit: HOME_RECOMMENDED_LIMIT,
   });
+  home.random = randomSample(items, 30);
+  res.set('Cache-Control', 'no-store');
   return res.json(home);
 });
 

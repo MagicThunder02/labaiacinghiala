@@ -272,6 +272,16 @@ button, input { font: inherit; }
   grid-template-columns: repeat(auto-fill, minmax(clamp(138px, 14vw, 190px), 1fr));
   gap: clamp(16px, 2vw, 27px) clamp(12px, 1.7vw, 22px);
 }
+
+/* Random picks: mini-catalogo a griglia, non un rail orizzontale. */
+.random-picks-section { margin-top: 48px; }
+.random-picks-grid.poster-grid {
+  grid-template-columns: repeat(auto-fill, minmax(clamp(112px, 10vw, 150px), 1fr));
+  gap: clamp(14px, 1.6vw, 22px) clamp(10px, 1.2vw, 16px);
+  align-items: start;
+}
+.random-picks-grid .poster-card { max-width: 168px; width: 100%; }
+
 .poster-card { min-width: 0; scroll-snap-align: start; }
 .poster-card-button {
   display: block;

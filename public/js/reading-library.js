@@ -53,6 +53,8 @@
     recentEmpty: document.querySelector('#recentEmpty'),
     latestEmpty: document.querySelector('#latestEmpty'),
     recommendedEmpty: document.querySelector('#recommendedEmpty'),
+    randomPicksGrid: document.querySelector('#randomPicksGrid'),
+    randomPicksEmpty: document.querySelector('#randomPicksEmpty'),
     catalogGrid: document.querySelector('#catalogGrid'),
     catalogCount: document.querySelector('#catalogCount'),
     catalogEmpty: document.querySelector('#catalogEmpty'),
@@ -79,6 +81,29 @@
     closingCoverImage: document.querySelector('#closingCoverImage'),
     closingCoverFallback: document.querySelector('#closingCoverFallback'),
   };
+
+  function randomSample(items, limit = 30) {
+    const pool = Array.isArray(items) ? [...items] : [];
+    const selectedCount = Math.min(Math.max(Number(limit) || 0, 0), pool.length);
+    for (let index = 0; index < selectedCount; index += 1) {
+      const swapIndex = index + Math.floor(Math.random() * (pool.length - index));
+      [pool[index], pool[swapIndex]] = [pool[swapIndex], pool[index]];
+    }
+    return pool.slice(0, selectedCount);
+  }
+
+  function sessionRandomPicks(key, incoming) {
+    const source = Array.isArray(incoming) ? incoming : [];
+    try {
+      const cached = JSON.parse(sessionStorage.getItem(key) || 'null');
+      if (Array.isArray(cached) && cached.length > 0) return cached;
+      const picks = randomSample(source, 30);
+      if (picks.length > 0) sessionStorage.setItem(key, JSON.stringify(picks));
+      return picks;
+    } catch {
+      return randomSample(source, 30);
+    }
+  }
 
   function metaLabel(item) {
     return [item.author, item.year].filter(Boolean).join(' · ');
@@ -131,6 +156,13 @@
     empty.hidden = items.length !== 0;
     const shell = container.closest('.showcase-shell');
     if (shell) shell.hidden = items.length === 0;
+  }
+
+  function renderRandomPicks(items) {
+    const picks = Array.isArray(items) ? items : [];
+    elements.randomPicksGrid.replaceChildren(...picks.map(createCard));
+    elements.randomPicksGrid.hidden = picks.length === 0;
+    elements.randomPicksEmpty.hidden = picks.length !== 0;
   }
 
   function renderCatalog() {
@@ -330,10 +362,19 @@
 
   async function loadHome() {
     const payload = await window.BaiaPage.apiRequest(`/api/reading/home?category=${encodeURIComponent(category)}`);
-    state.home = payload;
+    let randomSource = Array.isArray(payload.random) ? payload.random : [];
+    if (randomSource.length === 0) {
+      try {
+        const catalogPayload = await window.BaiaPage.apiRequest(`/api/reading?category=${encodeURIComponent(category)}&limit=250`);
+        randomSource = Array.isArray(catalogPayload.items) ? catalogPayload.items : [];
+      } catch {}
+    }
+    const random = sessionRandomPicks(`baia:random-picks:reading:${category}:v2`, randomSource);
+    state.home = { ...payload, random };
     renderRail(elements.recentRail, elements.recentEmpty, payload.recent || []);
     renderRail(elements.latestRail, elements.latestEmpty, payload.latest || []);
     renderRail(elements.recommendedRail, elements.recommendedEmpty, payload.recommended || []);
+    renderRandomPicks(random);
   }
 
   async function loadCatalog() {

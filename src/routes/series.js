@@ -13,6 +13,16 @@ const { buildSimilarSeriesRows } = require('../services/series-similar-service')
 
 const router = express.Router();
 
+function randomSample(items, limit) {
+  const pool = [...items];
+  const selectedCount = Math.min(Math.max(Number(limit) || 0, 0), pool.length);
+  for (let index = 0; index < selectedCount; index += 1) {
+    const swapIndex = index + Math.floor(Math.random() * (pool.length - index));
+    [pool[index], pool[swapIndex]] = [pool[swapIndex], pool[index]];
+  }
+  return pool.slice(0, selectedCount);
+}
+
 const listSeries = db.prepare(`
   SELECT s.series_uuid AS seriesUuid, s.title, s.year, s.genres_json AS genresJson,
          s.poster_path AS posterPath, s.added_at AS addedAt, s.updated_at AS updatedAt,
@@ -165,7 +175,10 @@ router.get('/home', (req, res) => {
     const episodes = getEpisodes.all(profileKey, row.seriesUuid).map(serializeEpisode);
     return serializeSeries(row, episodes);
   });
-  res.json(buildSeriesHome(seriesItems, profileKey));
+  const home = buildSeriesHome(seriesItems, profileKey);
+  home.random = randomSample(seriesItems, 30);
+  res.set('Cache-Control', 'no-store');
+  res.json(home);
 });
 
 router.get('/:seriesUuid/similar', (req, res) => {

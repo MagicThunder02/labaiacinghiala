@@ -167,6 +167,7 @@ function analyze(file) {
     exactEndSeekCommands: num(summary.exact_end_seek_commands),
     coalescedSeekInputs: num(summary.coalesced_seek_inputs),
     coalescedSeekDispatches: num(summary.coalesced_seek_dispatches),
+    audioTrackSwitches: num(summary.audio_track_switches),
     endFileSeekCorrelations: num(summary.end_file_seek_correlations) ?? seekCorrelationEvents,
     prematureEndSeekCorrelations: num(summary.premature_end_seek_correlations) ?? prematureSeekCorrelationEvents,
     lastSeekCorrelationMs,
@@ -233,5 +234,5 @@ if (csv) {
   for (const row of rows) console.log(columns.map((column) => esc(row[column])).join(','));
 } else {
   console.table(rows);
-  console.log('\nLettura rapida: 6B.7.3.4 mantiene invariati sparse cache, reservoir, EOF hardening e recovery. Guarda exactEndSeekCommands e coalescedSeekInputs/Dispatches per il nuovo hardening seek; in caso di END_FILE usa anche lastSeekCorrelationMode/SeekingBefore/SeekingAtEnd e i campi di correlazione 6B.7.3.3.');
+  console.log('\nLettura rapida: 6B.7.3.6 mantiene invariati sparse cache, reservoir, EOF hardening/recovery e seek hardening. audioTrackSwitches conta i cambi traccia audio; per gli END_FILE restano disponibili i campi di correlazione 6B.7.3.3.');
 }

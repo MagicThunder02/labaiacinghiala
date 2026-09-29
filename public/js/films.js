@@ -60,6 +60,31 @@ const APP_INTRO_REDUCED_MOTION_MS = 1200;
 const INTRO_RAIL_PREFETCH_CONCURRENCY = 6;
 const INTRO_RAIL_PREFETCH_STOP_MARGIN_MS = 180;
 
+function randomSample(items, limit = 30) {
+  const pool = Array.isArray(items) ? [...items] : [];
+  const selectedCount = Math.min(Math.max(Number(limit) || 0, 0), pool.length);
+  for (let index = 0; index < selectedCount; index += 1) {
+    const swapIndex = index + Math.floor(Math.random() * (pool.length - index));
+    [pool[index], pool[swapIndex]] = [pool[swapIndex], pool[index]];
+  }
+  return pool.slice(0, selectedCount);
+}
+
+function sessionRandomPicks(key, incoming) {
+  const source = Array.isArray(incoming) ? incoming : [];
+  try {
+    const cached = JSON.parse(sessionStorage.getItem(key) || 'null');
+    // Non considerare valido un vecchio []: la prima versione poteva salvarlo
+    // quando il backend non esponeva ancora `random`, bloccando la sezione vuota.
+    if (Array.isArray(cached) && cached.length > 0) return cached;
+    const picks = randomSample(source, 30);
+    if (picks.length > 0) sessionStorage.setItem(key, JSON.stringify(picks));
+    return picks;
+  } catch {
+    return randomSample(source, 30);
+  }
+}
+
 function getAppIntroPrefetchWindow() {
   if (window.parent === window) return null;
 
@@ -245,6 +270,8 @@ const elements = {
   recentEmpty: document.querySelector('#recentEmpty'),
   latestEmpty: document.querySelector('#latestEmpty'),
   recommendedEmpty: document.querySelector('#recommendedEmpty'),
+  randomPicksGrid: document.querySelector('#randomPicksGrid'),
+  randomPicksEmpty: document.querySelector('#randomPicksEmpty'),
   catalogGrid: document.querySelector('#catalogGrid'),
   catalogCount: document.querySelector('#catalogCount'),
   catalogEmpty: document.querySelector('#catalogEmpty'),
@@ -704,6 +731,13 @@ function renderRail(container, emptyElement, movies) {
   container.closest('.showcase-shell').hidden = movies.length === 0;
 }
 
+function renderRandomPicks(movies) {
+  const items = Array.isArray(movies) ? movies : [];
+  elements.randomPicksGrid.replaceChildren(...items.map((movie) => createPosterCard(movie)));
+  elements.randomPicksGrid.hidden = items.length === 0;
+  elements.randomPicksEmpty.hidden = items.length !== 0;
+}
+
 function renderCatalog() {
   elements.catalogGrid.replaceChildren(...state.catalog.map((movie) => createPosterCard(movie)));
   elements.catalogCount.textContent = state.catalogTotal === 1
@@ -917,10 +951,19 @@ async function loadFilters() {
 
 async function loadHome() {
   const payload = await window.BaiaPage.apiRequest('/api/movies/home');
-  state.home = payload;
+  let randomSource = Array.isArray(payload.random) ? payload.random : [];
+  if (randomSource.length === 0) {
+    try {
+      const catalogPayload = await window.BaiaPage.apiRequest('/api/movies?type=movie');
+      randomSource = Array.isArray(catalogPayload.movies) ? catalogPayload.movies : [];
+    } catch {}
+  }
+  const random = sessionRandomPicks('baia:random-picks:films:v2', randomSource);
+  state.home = { ...payload, random };
   renderRail(elements.recentRail, elements.recentEmpty, payload.recent || []);
   renderRail(elements.latestRail, elements.latestEmpty, payload.latest || []);
   renderRail(elements.recommendedRail, elements.recommendedEmpty, payload.recommended || []);
+  renderRandomPicks(random);
 }
 
 async function waitForInitialHomeVisuals() {
