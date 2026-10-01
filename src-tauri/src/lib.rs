@@ -3,7 +3,12 @@ mod connector_tls;
 mod core;
 mod identity;
 mod media_bridge;
+#[cfg(not(target_os = "android"))]
 mod native_media_source;
+#[cfg(not(target_os = "android"))]
+mod native_player;
+#[cfg(target_os = "android")]
+#[path = "native_player_android.rs"]
 mod native_player;
 mod native_upload;
 mod pairing;

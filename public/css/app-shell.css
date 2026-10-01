@@ -2941,6 +2941,21 @@ body.force-sidebar-open .sidebar {
   background-color: currentColor;
 }
 
+/* Android conserva per un frame lo stato hover/focus dopo un tap e Chrome
+   disegna anche il proprio highlight. Evitiamo il lampo chiaro senza cambiare
+   il feedback da tastiera del layout desktop. */
+html.baia-android .shell-context-back {
+  -webkit-tap-highlight-color: transparent;
+  transition: none;
+}
+html.baia-android .shell-context-back:hover,
+html.baia-android .shell-context-back:focus,
+html.baia-android .shell-context-back:focus-visible,
+html.baia-android .shell-context-back:active {
+  background: rgba(255, 255, 255, .075);
+  box-shadow: none;
+  outline: none;
+}
 @media (max-width: 720px) {
   .shell-topbar-left { gap: 8px; }
   .shell-context-back {

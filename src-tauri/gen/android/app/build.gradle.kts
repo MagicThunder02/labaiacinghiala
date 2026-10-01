@@ -57,6 +57,9 @@ android {
             }
         }
         getByName("release") {
+            // Il MediaBridge Baia espone copertine/media solo su loopback HTTP.
+            // La build 0.5.2 funzionante aveva cleartext abilitato anche nel manifest.
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
             if (keystorePropertiesFile.exists()) {
                 signingConfig = signingConfigs.getByName("release")
             }
