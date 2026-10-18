@@ -1,15 +1,19 @@
 package it.baia.cinghiala
 
 import android.graphics.Canvas
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.MotionEvent
+import android.view.PixelCopy
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.SurfaceHolder
@@ -63,6 +67,11 @@ class BaiaNativePlayerView(
     val id: Int,
     val label: String,
     val selected: Boolean,
+  )
+
+  private data class MenuBackdrop(
+    val bitmap: Bitmap,
+    val bounds: RectF,
   )
 
   private enum class DragMode { NONE, SEEK, VOLUME }
@@ -294,27 +303,61 @@ class BaiaNativePlayerView(
     val position = safeDouble("time-pos") ?: 0.0
     val paused = safeBoolean("pause") ?: false
     val volume = safeDouble("volume") ?: initialVolume.coerceIn(0.0, 100.0)
-    chrome.updatePlayback(position, duration, paused, volume, readAudioTracks())
+    chrome.updatePlayback(position, duration, paused, volume, readAudioTracks(), readTracks("sub"))
   }
 
-  private fun readAudioTracks(): List<AudioTrack> {
-    val count = safeInt("track-list/count") ?: return emptyList()
+  private fun languageLabel(language: String, title: String): String {
+    fun resolve(value: String): String? = when (value.lowercase(Locale.ROOT).substringBefore('-').substringBefore('_')) {
+      "it", "ita", "italian", "italiano" -> "Italiano"
+      "en", "eng", "english", "inglese" -> "Inglese"
+      "fr", "fra", "fre", "french", "français", "francese" -> "Francese"
+      "de", "deu", "ger", "german", "deutsch", "tedesco" -> "Tedesco"
+      "es", "spa", "spanish", "español", "spagnolo" -> "Spagnolo"
+      "pt", "por", "portuguese", "português", "portoghese" -> "Portoghese"
+      "ja", "jpn", "japanese", "giapponese" -> "Giapponese"
+      "ko", "kor", "korean", "coreano" -> "Coreano"
+      "zh", "zho", "chi", "chinese", "cinese" -> "Cinese"
+      "ru", "rus", "russian", "russo" -> "Russo"
+      "ar", "ara", "arabic", "arabo" -> "Arabo"
+      "nl", "nld", "dut", "dutch", "olandese" -> "Olandese"
+      "pl", "pol", "polish", "polacco" -> "Polacco"
+      "sv", "swe", "swedish", "svedese" -> "Svedese"
+      "da", "dan", "danish", "danese" -> "Danese"
+      "fi", "fin", "finnish", "finlandese" -> "Finlandese"
+      "no", "nor", "norwegian", "norvegese" -> "Norvegese"
+      "el", "ell", "gre", "greek", "greco" -> "Greco"
+      "tr", "tur", "turkish", "turco" -> "Turco"
+      "hi", "hin", "hindi" -> "Hindi"
+      "uk", "ukr", "ukrainian", "ucraino" -> "Ucraino"
+      "cs", "ces", "cze", "czech", "ceco" -> "Ceco"
+      "hu", "hun", "hungarian", "ungherese" -> "Ungherese"
+      "ro", "ron", "rum", "romanian", "rumeno" -> "Rumeno"
+      "he", "heb", "hebrew", "ebraico" -> "Ebraico"
+      "th", "tha", "thai", "thailandese" -> "Thailandese"
+      else -> null
+    }
+    return resolve(language) ?: title.split(Regex("[^\\p{L}]+"))
+      .firstNotNullOfOrNull { resolve(it) } ?: "Lingua sconosciuta"
+  }
+
+  private fun readAudioTracks(): List<AudioTrack> = readTracks("audio")
+  private fun readTracks(kind: String): List<AudioTrack> {
     val tracks = ArrayList<AudioTrack>()
+    val selectedId = safeInt(if (kind == "sub") "sid" else "aid")
+    if (kind == "sub") tracks += AudioTrack(0, "Disattivati", selectedId == null || selectedId <= 0)
+    val count = (safeInt("track-list/count") ?: 0).coerceIn(0, 128)
     for (index in 0 until count) {
-      if (safeString("track-list/$index/type") != "audio") continue
+      if (safeString("track-list/$index/type") != kind) continue
       val id = safeInt("track-list/$index/id") ?: continue
       val title = safeString("track-list/$index/title")?.trim().orEmpty()
       val language = safeString("track-list/$index/lang")?.trim().orEmpty()
-      val selected = safeBoolean("track-list/$index/selected") ?: false
-      val label = when {
-        title.isNotEmpty() && language.isNotEmpty() -> "$title · $language"
-        title.isNotEmpty() -> title
-        language.isNotEmpty() -> "Traccia $id · $language"
-        else -> "Traccia $id"
-      }
-      tracks += AudioTrack(id, label, selected)
+      tracks += AudioTrack(id, languageLabel(language, title), selectedId == id)
     }
     return tracks
+  }
+  private fun selectSubtitleTrack(id: Int) {
+    if (!mpvInitialized || released) return
+    MPVLib.setPropertyString("sid", if (id == 0) "no" else id.toString())
   }
 
   private fun selectAudioTrack(id: Int) {
@@ -469,6 +512,7 @@ class BaiaNativePlayerView(
     private val density = resources.displayMetrics.density
     private val scaledDensity = resources.displayMetrics.scaledDensity
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val menuBackdropPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
       style = Paint.Style.STROKE
       strokeCap = Paint.Cap.ROUND
@@ -486,6 +530,16 @@ class BaiaNativePlayerView(
     private var previewSeconds: Double? = null
     private var tracks: List<AudioTrack> = emptyList()
     private var audioMenuOpen = false
+    private var subtitleMenu = false
+    private var subtitleTracks: List<AudioTrack> = emptyList()
+    private var menuScroll = 0
+    private var menuGesture = false
+    private var menuScrollAtDown = 0
+    private var menuBackdrop: MenuBackdrop? = null
+    private var backdropCopyPending = false
+    private var backdropGeneration = 0
+    private var lastBackdropCopyAt = 0L
+    private fun menuTracks(): List<AudioTrack> = if (subtitleMenu) subtitleTracks else tracks
     private var dragMode = DragMode.NONE
     private var downX = 0f
     private var downY = 0f
@@ -526,16 +580,24 @@ class BaiaNativePlayerView(
       isPaused: Boolean,
       currentVolume: Double,
       audioTracks: List<AudioTrack>,
+      subtitles: List<AudioTrack>,
     ) {
       timePos = position.coerceAtLeast(0.0)
       duration = total.coerceAtLeast(0.0)
       volume = currentVolume.coerceIn(0.0, 100.0)
       paused = isPaused
       tracks = audioTracks
-      if (tracks.isEmpty()) audioMenuOpen = false
+      subtitleTracks = subtitles
+      menuScroll = menuScroll.coerceIn(0, max(0, menuTracks().size - 1))
+      if (menuTracks().isEmpty()) audioMenuOpen = false
       if (paused) {
         mainHandler.removeCallbacks(hideRunnable)
         controlsVisible = true
+      }
+      if (audioMenuOpen && width > 0 && height > 0) {
+        requestMenuBackdrop(geometry())
+      } else if (!audioMenuOpen) {
+        clearMenuBackdrop()
       }
       invalidate()
     }
@@ -554,6 +616,7 @@ class BaiaNativePlayerView(
       pendingSingleTap?.let(mainHandler::removeCallbacks)
       pendingSingleTap = null
       mainHandler.removeCallbacks(clearSeekFeedbackRunnable)
+      clearMenuBackdrop()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -571,7 +634,8 @@ class BaiaNativePlayerView(
       drawVolume(canvas, g)
       if (tracks.isNotEmpty()) drawAudioButton(canvas, g)
       drawFullscreen(canvas, g)
-      if (audioMenuOpen && tracks.isNotEmpty()) drawAudioMenu(canvas, g)
+      drawSubtitleButton(canvas, g)
+      if (audioMenuOpen && menuTracks().isNotEmpty()) drawAudioMenu(canvas, g)
       drawSeekFeedback(canvas)
     }
 
@@ -592,14 +656,11 @@ class BaiaNativePlayerView(
           pinchScale = 1f
           edgeBackCandidate = x <= dp(48f)
 
-          if (controlsVisible && audioMenuOpen) {
-            audioTrackAt(x, y, g)?.let { track ->
-              selectAudioTrack(track.id)
-              audioMenuOpen = false
-              gestureConsumed = true
-              showControls(restartTimer = true)
-              return true
-            }
+          menuGesture = controlsVisible && audioMenuOpen && g.audioMenu.contains(x, y)
+          if (menuGesture) {
+            menuScrollAtDown = menuScroll
+            mainHandler.removeCallbacks(hideRunnable)
+            return true
           }
 
           if (controlsVisible && g.seekTouch.contains(x, y)) {
@@ -619,6 +680,7 @@ class BaiaNativePlayerView(
         }
 
         MotionEvent.ACTION_POINTER_DOWN -> {
+          if (menuGesture) return true
           if (event.pointerCount >= 2) {
             pinchActive = true
             gestureConsumed = true
@@ -633,6 +695,14 @@ class BaiaNativePlayerView(
         }
 
         MotionEvent.ACTION_MOVE -> {
+          if (menuGesture) {
+            if (abs(y - downY) > touchSlop || abs(x - downX) > touchSlop) moved = true
+            val visibleRows = ((g.audioMenu.height() - g.audioHeaderHeight - dp(12f)) / g.audioRowHeight).toInt()
+            menuScroll = (menuScrollAtDown + ((downY - y) / g.audioRowHeight).toInt())
+              .coerceIn(0, max(0, menuTracks().size - visibleRows))
+            invalidate()
+            return true
+          }
           if (pinchActive && event.pointerCount >= 2) {
             val span = pointerSpan(event)
             if (pinchStartSpan > 0f && span > 0f) pinchScale = span / pinchStartSpan
@@ -653,6 +723,17 @@ class BaiaNativePlayerView(
         }
 
         MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+          if (menuGesture) {
+            menuGesture = false
+            if (event.actionMasked == MotionEvent.ACTION_UP && !moved) {
+              audioTrackAt(x, y, g)?.let { track ->
+                if (subtitleMenu) selectSubtitleTrack(track.id) else selectAudioTrack(track.id)
+                audioMenuOpen = false
+              }
+            }
+            showControls(restartTimer = !audioMenuOpen)
+            return true
+          }
           if (event.actionMasked == MotionEvent.ACTION_UP && pinchActive) {
             finishPinchGesture()
           }
@@ -709,12 +790,23 @@ class BaiaNativePlayerView(
                 if (paused) play() else pause()
                 true
               }
-              tracks.isNotEmpty() && circleHit(x, y, g.audioX, g.audioY, dp(31f)) -> {
-                audioMenuOpen = !audioMenuOpen
+              circleHit(x, y, g.audioX - dp(62f), g.audioY, dp(26f)) -> {
+                val wasOpen = audioMenuOpen && subtitleMenu
+                subtitleMenu = true
+                menuScroll = 0
+                audioMenuOpen = !wasOpen
                 showControls(restartTimer = !audioMenuOpen)
                 true
               }
-              circleHit(x, y, g.fullscreenX, g.fullscreenY, dp(31f)) -> {
+              tracks.isNotEmpty() && circleHit(x, y, g.audioX, g.audioY, dp(26f)) -> {
+                val wasOpen = audioMenuOpen && !subtitleMenu
+                subtitleMenu = false
+                menuScroll = 0
+                audioMenuOpen = !wasOpen
+                showControls(restartTimer = !audioMenuOpen)
+                true
+              }
+              circleHit(x, y, g.fullscreenX, g.fullscreenY, dp(26f)) -> {
                 applyImmersive(!immersiveFullscreen)
                 showControls(restartTimer = true)
                 true
@@ -869,7 +961,7 @@ class BaiaNativePlayerView(
       val bottom = max(height - dp(124f), dp(150f))
       val available = max(bottom - dp(92f) - headerHeight - dp(12f), rowHeight)
       val maxRows = max(1, (available / rowHeight).toInt())
-      val visibleRows = min(tracks.size, maxRows)
+      val visibleRows = min(menuTracks().size, maxRows)
       val panelHeight = headerHeight + rowHeight * visibleRows + dp(12f)
       val panelTop = max(bottom - panelHeight - dp(18f), dp(72f))
       val audioMenu = RectF(panelLeft, panelTop, panelRight, panelTop + panelHeight)
@@ -1030,7 +1122,7 @@ class BaiaNativePlayerView(
 
     private fun drawAudioButton(canvas: Canvas, g: Geometry) {
       paint.style = Paint.Style.FILL
-      paint.color = if (audioMenuOpen) {
+      paint.color = if (audioMenuOpen && !subtitleMenu) {
         Color.argb(224, 56, 74, 41)
       } else {
         Color.argb(133, 18, 18, 18)
@@ -1044,6 +1136,21 @@ class BaiaNativePlayerView(
       canvas.drawRect(sx, sy, sx + dp(10f), sy + dp(3f), paint)
       canvas.drawRect(sx, sy, sx + dp(2.5f), sy + dp(14f), paint)
       canvas.drawCircle(sx - dp(2f), sy + dp(15f), dp(4.5f), paint)
+    }
+
+    private fun drawSubtitleButton(canvas: Canvas, g: Geometry) {
+      val cx = g.audioX - dp(62f)
+      val cy = g.audioY
+      paint.style = Paint.Style.FILL
+      paint.color = if (audioMenuOpen && subtitleMenu) Color.argb(224, 56, 74, 41) else Color.argb(133, 18, 18, 18)
+      canvas.drawCircle(cx, cy, dp(26f), paint)
+      // Stessa geometria di public/icons/subtitles.svg.
+      stroke.color = Color.WHITE
+      stroke.strokeWidth = dp(2f)
+      canvas.drawRoundRect(RectF(cx - dp(10.4f), cy - dp(8.3f), cx + dp(10.4f), cy + dp(8.3f)), dp(2f), dp(2f), stroke)
+      canvas.drawLine(cx - dp(6.25f), cy - dp(1f), cx - dp(2f), cy - dp(1f), stroke)
+      canvas.drawLine(cx + dp(2f), cy - dp(1f), cx + dp(6.25f), cy - dp(1f), stroke)
+      canvas.drawLine(cx - dp(6.25f), cy + dp(4f), cx + dp(4f), cy + dp(4f), stroke)
     }
 
     private fun drawFullscreen(canvas: Canvas, g: Geometry) {
@@ -1093,27 +1200,47 @@ class BaiaNativePlayerView(
     }
 
     private fun drawAudioMenu(canvas: Canvas, g: Geometry) {
-      paint.style = Paint.Style.FILL
-      paint.color = Color.argb(232, 62, 82, 48)
-      canvas.drawRoundRect(g.audioMenu, dp(18f), dp(18f), paint)
+      val radius = dp(18f)
+      val saved = canvas.save()
+      val clip = Path().apply { addRoundRect(g.audioMenu, radius, radius, Path.Direction.CW) }
+      canvas.clipPath(clip)
+      val backdrop = menuBackdrop
+      if (backdrop != null && !backdrop.bitmap.isRecycled) {
+        canvas.drawBitmap(backdrop.bitmap, null, backdrop.bounds, menuBackdropPaint)
+      } else {
+        // Fallback temporaneo per il primo frame, prima che PixelCopy termini.
+        paint.style = Paint.Style.FILL
+        paint.color = Color.rgb(46, 57, 40)
+        canvas.drawRect(g.audioMenu, paint)
+      }
+      canvas.restoreToCount(saved)
+
       stroke.color = Color.argb(38, 255, 255, 255)
       stroke.strokeWidth = dp(1f)
-      canvas.drawRoundRect(g.audioMenu, dp(18f), dp(18f), stroke)
+      canvas.drawRoundRect(g.audioMenu, radius, radius, stroke)
 
       paint.typeface = medium
       paint.textSize = sp(15f)
       paint.color = Color.argb(250, 255, 255, 255)
       paint.textAlign = Paint.Align.LEFT
       canvas.drawText(
-        "Tracce audio",
+        if (subtitleMenu) "Sottotitoli" else "Tracce audio",
         g.audioMenu.left + dp(16f),
         textBaseline(g.audioMenu.top + g.audioHeaderHeight * 0.5f, paint),
         paint,
       )
 
-      val visibleRows = min(tracks.size, ((g.audioMenu.height() - g.audioHeaderHeight - dp(12f)) / g.audioRowHeight).toInt())
+      val visibleRows = min(menuTracks().size - menuScroll, ((g.audioMenu.height() - g.audioHeaderHeight - dp(12f)) / g.audioRowHeight).toInt())
+      if (menuScroll > 0) {
+        paint.textAlign = Paint.Align.RIGHT
+        canvas.drawText("↑", g.audioMenu.right - dp(16f), g.audioMenu.top + dp(26f), paint)
+      }
+      if (menuScroll + visibleRows < menuTracks().size) {
+        paint.textAlign = Paint.Align.RIGHT
+        canvas.drawText("↓", g.audioMenu.right - dp(16f), g.audioMenu.bottom - dp(4f), paint)
+      }
       for (index in 0 until visibleRows) {
-        val track = tracks[index]
+        val track = menuTracks()[index + menuScroll]
         val top = g.audioMenu.top + g.audioHeaderHeight + g.audioRowHeight * index
         val row = RectF(
           g.audioMenu.left + dp(8f),
@@ -1135,12 +1262,138 @@ class BaiaNativePlayerView(
       }
     }
 
+    private fun requestMenuBackdrop(g: Geometry, force: Boolean = false) {
+      if (!audioMenuOpen || released || !videoSurfaceView.holder.surface.isValid) return
+      if (backdropCopyPending) return
+      val now = SystemClock.uptimeMillis()
+      if (!force && now - lastBackdropCopyAt < 350L) return
+
+      val padding = dp(34f).roundToInt()
+      val source = Rect(
+        (g.audioMenu.left.toInt() - padding).coerceAtLeast(0),
+        (g.audioMenu.top.toInt() - padding).coerceAtLeast(0),
+        (g.audioMenu.right.toInt() + padding).coerceAtMost(videoSurfaceView.width),
+        (g.audioMenu.bottom.toInt() + padding).coerceAtMost(videoSurfaceView.height),
+      )
+      if (source.width() < 2 || source.height() < 2) return
+
+      // Un quarto della risoluzione conserva i dettagli del fotogramma ma rende
+      // il blur abbastanza leggero da poter essere aggiornato durante il video.
+      val bitmap = Bitmap.createBitmap(
+        max(2, source.width() / 4),
+        max(2, source.height() / 4),
+        Bitmap.Config.ARGB_8888,
+      )
+      backdropCopyPending = true
+      lastBackdropCopyAt = now
+      val generation = ++backdropGeneration
+      try {
+        PixelCopy.request(videoSurfaceView, source, bitmap, { result ->
+          if (generation != backdropGeneration) {
+            bitmap.recycle()
+            return@request
+          }
+          backdropCopyPending = false
+          if (result != PixelCopy.SUCCESS || !audioMenuOpen || released) {
+            bitmap.recycle()
+            return@request
+          }
+          blurAndTintMenuBackdrop(bitmap)
+          menuBackdrop?.bitmap?.takeUnless(Bitmap::isRecycled)?.recycle()
+          menuBackdrop = MenuBackdrop(bitmap, RectF(source))
+          invalidate()
+        }, mainHandler)
+      } catch (_: Throwable) {
+        if (generation == backdropGeneration) backdropCopyPending = false
+        bitmap.recycle()
+      }
+    }
+
+    private fun clearMenuBackdrop() {
+      if (menuBackdrop == null && !backdropCopyPending) return
+      backdropGeneration += 1
+      backdropCopyPending = false
+      menuBackdrop?.bitmap?.takeUnless(Bitmap::isRecycled)?.recycle()
+      menuBackdrop = null
+    }
+
+    private fun blurAndTintMenuBackdrop(bitmap: Bitmap) {
+      val bitmapWidth = bitmap.width
+      val bitmapHeight = bitmap.height
+      if (bitmapWidth < 2 || bitmapHeight < 2) return
+      var source = IntArray(bitmapWidth * bitmapHeight)
+      var destination = IntArray(source.size)
+      bitmap.getPixels(source, 0, bitmapWidth, 0, 0, bitmapWidth, bitmapHeight)
+
+      fun blur(horizontal: Boolean, radius: Int) {
+        for (y in 0 until bitmapHeight) {
+          for (x in 0 until bitmapWidth) {
+            var red = 0
+            var green = 0
+            var blue = 0
+            var samples = 0
+            for (offset in -radius..radius) {
+              val sampleX = if (horizontal) (x + offset).coerceIn(0, bitmapWidth - 1) else x
+              val sampleY = if (horizontal) y else (y + offset).coerceIn(0, bitmapHeight - 1)
+              val color = source[sampleY * bitmapWidth + sampleX]
+              red += Color.red(color)
+              green += Color.green(color)
+              blue += Color.blue(color)
+              samples += 1
+            }
+            destination[y * bitmapWidth + x] = Color.rgb(red / samples, green / samples, blue / samples)
+          }
+        }
+        val swap = source
+        source = destination
+        destination = swap
+      }
+
+      // Equivalente ridotto dei due box blur 13px + 9px del compositor Windows.
+      blur(horizontal = true, radius = 3)
+      blur(horizontal = false, radius = 3)
+      blur(horizontal = true, radius = 2)
+      blur(horizontal = false, radius = 2)
+
+      val saturation = 0.82f
+      val brightness = 0.66f
+      val tintRed = 156f
+      val tintGreen = 207f
+      val tintBlue = 111f
+      for (y in 0 until bitmapHeight) {
+        val tintAlpha = 0.15f + (1f - y.toFloat() / max(1, bitmapHeight).toFloat()) * 0.035f
+        val highlight = (1f - y.toFloat() / max(1f, dp(96f) / 4f)).coerceIn(0f, 1f) * 0.018f
+        for (x in 0 until bitmapWidth) {
+          val index = y * bitmapWidth + x
+          val color = source[index]
+          val red = Color.red(color).toFloat()
+          val green = Color.green(color).toFloat()
+          val blue = Color.blue(color).toFloat()
+          val luma = red * 0.2126f + green * 0.7152f + blue * 0.0722f
+          fun adjust(channel: Float, tint: Float): Int {
+            var value = (luma + (channel - luma) * saturation) * brightness
+            value = value * (1f - tintAlpha) + tint * tintAlpha
+            value = value * (1f - highlight) + 255f * highlight
+            return value.coerceIn(0f, 255f).roundToInt()
+          }
+          source[index] = Color.rgb(
+            adjust(red, tintRed),
+            adjust(green, tintGreen),
+            adjust(blue, tintBlue),
+          )
+        }
+      }
+      bitmap.setPixels(source, 0, bitmapWidth, 0, 0, bitmapWidth, bitmapHeight)
+    }
+
     private fun audioTrackAt(x: Float, y: Float, g: Geometry): AudioTrack? {
       if (!audioMenuOpen || !g.audioMenu.contains(x, y)) return null
       val rowsTop = g.audioMenu.top + g.audioHeaderHeight
       if (y < rowsTop) return null
       val index = ((y - rowsTop) / g.audioRowHeight).toInt()
-      return tracks.getOrNull(index)
+      val visibleRows = ((g.audioMenu.height() - g.audioHeaderHeight - dp(12f)) / g.audioRowHeight).toInt()
+      if (index !in 0 until visibleRows) return null
+      return menuTracks().getOrNull(index + menuScroll)
     }
 
     private fun updateSeekPreview(x: Float, g: Geometry) {

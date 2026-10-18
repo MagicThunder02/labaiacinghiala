@@ -66,6 +66,7 @@ enum SurfaceAction {
     SeekRelative(f64),
     SetVolume(f64),
     SelectAudioTrack(i64),
+    SelectSubtitleTrack(i64),
     ToggleFullscreen,
     RequestClose,
 }
@@ -89,6 +90,8 @@ struct RenderUiState {
     controls_visible: bool,
     controls_hide_at: Option<Instant>,
     audio_tracks: Vec<AudioTrackInfo>,
+    subtitle_tracks: Vec<AudioTrackInfo>,
+    subtitle_menu: bool,
     audio_menu_open: bool,
     audio_menu_hover: Option<usize>,
     audio_menu_scroll: usize,
@@ -111,6 +114,8 @@ impl Default for RenderUiState {
             controls_visible: true,
             controls_hide_at: None,
             audio_tracks: Vec::new(),
+            subtitle_tracks: Vec::new(),
+            subtitle_menu: false,
             audio_menu_open: false,
             audio_menu_hover: None,
             audio_menu_scroll: 0,
@@ -119,6 +124,19 @@ impl Default for RenderUiState {
 }
 
 impl RenderUiState {
+    fn menu_tracks(&self) -> &Vec<AudioTrackInfo> {
+        if self.subtitle_menu { &self.subtitle_tracks } else { &self.audio_tracks }
+    }
+    fn toggle_subtitle_menu(&mut self, now: Instant) {
+        let was_open = self.audio_menu_open && self.subtitle_menu;
+        self.subtitle_menu = true;
+        self.audio_menu_open = !was_open;
+        self.audio_menu_scroll = 0;
+        self.audio_menu_hover = None;
+        if self.audio_menu_open { self.begin_controls_interaction(); }
+        else { self.schedule_controls_hide(now); }
+    }
+
     fn intro_progress(&self, now: Instant) -> f32 {
         self.intro_started_at
             .map(|started| {
@@ -158,7 +176,7 @@ impl RenderUiState {
 
     fn set_audio_tracks(&mut self, tracks: Vec<AudioTrackInfo>) {
         self.audio_tracks = tracks;
-        if self.audio_tracks.is_empty() {
+        if self.audio_tracks.is_empty() && !self.subtitle_menu {
             self.audio_menu_open = false;
             self.audio_menu_hover = None;
             self.audio_menu_scroll = 0;
@@ -176,7 +194,10 @@ impl RenderUiState {
         if self.audio_tracks.is_empty() {
             return;
         }
-        self.audio_menu_open = !self.audio_menu_open;
+        let was_open = self.audio_menu_open && !self.subtitle_menu;
+        self.subtitle_menu = false;
+        self.audio_menu_scroll = 0;
+        self.audio_menu_open = !was_open;
         self.audio_menu_hover = None;
         if self.audio_menu_open {
             self.begin_controls_interaction();
@@ -684,6 +705,11 @@ mod win32_render_surface {
         )
     }
 
+    fn subtitle_button_center(width: f32, height: f32) -> (f32, f32) {
+        let (x, y) = audio_button_center(width, height);
+        (x - AUDIO_BUTTON_DIAMETER - AUDIO_BUTTON_GAP, y)
+    }
+
     fn audio_menu_layout(width: f32, height: f32, state: &super::RenderUiState) -> AudioMenuLayout {
         let panel_width = (width * 0.29).clamp(282.0, 350.0).min((width - 32.0).max(180.0));
         let right = width - 28.0;
@@ -692,8 +718,8 @@ mod win32_render_surface {
         let available = (bottom - 92.0 - AUDIO_MENU_HEADER_HEIGHT - 12.0)
             .max(AUDIO_MENU_ROW_HEIGHT);
         let max_rows = (available / AUDIO_MENU_ROW_HEIGHT).floor().max(1.0) as usize;
-        let visible_rows = state.audio_tracks.len().min(max_rows.max(1));
-        let max_start = state.audio_tracks.len().saturating_sub(visible_rows);
+        let visible_rows = state.menu_tracks().len().min(max_rows.max(1));
+        let max_start = state.menu_tracks().len().saturating_sub(visible_rows);
         let start_index = state.audio_menu_scroll.min(max_start);
         let panel_height =
             AUDIO_MENU_HEADER_HEIGHT + AUDIO_MENU_ROW_HEIGHT * visible_rows as f32 + 12.0;
@@ -798,12 +824,12 @@ mod win32_render_surface {
                 return None;
             }
             let layout = audio_menu_layout(width, height, &state);
-            layout.hit_track_index(x, y, state.audio_tracks.len())
+            layout.hit_track_index(x, y, state.menu_tracks().len())
         }
 
         fn scroll_audio_menu(&self, hwnd: Hwnd, wheel_delta: i16) {
             let state = self.shared.snapshot();
-            if !state.audio_menu_open || state.audio_tracks.len() <= 1 || wheel_delta == 0 {
+            if !state.audio_menu_open || state.menu_tracks().len() <= 1 || wheel_delta == 0 {
                 return;
             }
             let Some((width, height)) = Self::dimensions(hwnd) else { return; };
@@ -864,25 +890,27 @@ mod win32_render_surface {
 
             if state.audio_menu_open {
                 let layout = audio_menu_layout(width, height, &state);
-                if let Some(index) = layout.hit_track_index(x, y, state.audio_tracks.len()) {
-                    if let Some(track) = state.audio_tracks.get(index) {
+                if let Some(index) = layout.hit_track_index(x, y, state.menu_tracks().len()) {
+                    if let Some(track) = state.menu_tracks().get(index) {
                         let track_id = track.id;
                         self.shared.update(|ui| {
-                            for item in &mut ui.audio_tracks {
+                            let tracks = if ui.subtitle_menu { &mut ui.subtitle_tracks } else { &mut ui.audio_tracks };
+                            for item in tracks {
                                 item.selected = item.id == track_id;
                             }
                             ui.close_audio_menu(now);
                         });
-                        let _ = self.actions.send(SurfaceAction::SelectAudioTrack(track_id));
+                        let _ = self.actions.send(if state.subtitle_menu { SurfaceAction::SelectSubtitleTrack(track_id) } else { SurfaceAction::SelectAudioTrack(track_id) });
                     }
                     return;
                 }
 
-                let (audio_x, audio_y) = audio_button_center(width, height);
+                let (audio_x, audio_y) = if state.subtitle_menu { subtitle_button_center(width, height) } else { audio_button_center(width, height) };
                 let dx = x - audio_x;
                 let dy = y - audio_y;
-                if dx * dx + dy * dy <= 34.0 * 34.0 {
-                    self.toggle_audio_menu(now);
+                if dx * dx + dy * dy <= 26.0 * 26.0 {
+                    if state.subtitle_menu { self.shared.update(|ui| ui.toggle_subtitle_menu(now)); }
+                    else { self.toggle_audio_menu(now); }
                     return;
                 }
 
@@ -913,11 +941,16 @@ mod win32_render_surface {
                 return;
             }
 
+            let (sub_x, sub_y) = subtitle_button_center(width, height);
+            if (x - sub_x).powi(2) + (y - sub_y).powi(2) <= 26.0 * 26.0 {
+                self.shared.update(|ui| ui.toggle_subtitle_menu(now));
+                return;
+            }
             let (audio_x, audio_y) = audio_button_center(width, height);
             if !state.audio_tracks.is_empty() {
                 let dx = x - audio_x;
                 let dy = y - audio_y;
-                if dx * dx + dy * dy <= 34.0 * 34.0 {
+                if dx * dx + dy * dy <= 26.0 * 26.0 {
                     self.toggle_audio_menu(now);
                     return;
                 }
@@ -927,7 +960,7 @@ mod win32_render_surface {
             let fullscreen_y = height - 52.0;
             let dx = x - fullscreen_x;
             let dy = y - fullscreen_y;
-            if dx * dx + dy * dy <= 34.0 * 34.0 {
+            if dx * dx + dy * dy <= 26.0 * 26.0 {
                 self.shared.update(|ui| ui.show_controls(now));
                 let _ = self.actions.send(SurfaceAction::ToggleFullscreen);
                 return;
@@ -1468,6 +1501,7 @@ mod win32_render_surface {
         fullscreen_exit: UiTexture,
         volume: UiTexture,
         audio_track: UiTexture,
+        subtitles: UiTexture,
         circle_small: UiTexture,
         circle_large: UiTexture,
         back_button_pill: UiTexture,
@@ -1499,6 +1533,7 @@ mod win32_render_surface {
                 )?,
                 volume: UiTexture::from_alpha(58, 58, ICON_VOLUME_ALPHA)?,
                 audio_track: UiTexture::from_alpha(50, 50, ICON_AUDIO_TRACK_ALPHA)?,
+                subtitles: UiTexture::from_alpha(50, 50, include_bytes!("native_player_assets/subtitles-50.alpha"))?,
                 circle_small: UiTexture::from_alpha(32, 32, CIRCLE_16_ALPHA)?,
                 circle_large: UiTexture::from_alpha(128, 128, CIRCLE_64_ALPHA)?,
                 back_button_pill: UiTexture::from_alpha(208, 84, BACK_BUTTON_PILL_ALPHA)?,
@@ -1952,7 +1987,7 @@ mod win32_render_surface {
         width: f32,
         height: f32,
     ) {
-        if !state.audio_menu_open || state.audio_tracks.is_empty() {
+        if !state.audio_menu_open || state.menu_tracks().is_empty() {
             return;
         }
 
@@ -2007,7 +2042,7 @@ mod win32_render_surface {
         let text_left = panel_left + 16.0;
         let title_y = (panel_top + layout.header_height * 0.5).round();
         let _ = text_renderer.draw(
-            "Tracce audio",
+            if state.subtitle_menu { "Sottotitoli" } else { "Tracce audio" },
             text_left,
             title_y,
             15,
@@ -2018,9 +2053,9 @@ mod win32_render_surface {
 
         let rows_left = panel_left + 8.0;
         let rows_right = panel_right - 8.0;
-        let end = (layout.start_index + layout.visible_rows).min(state.audio_tracks.len());
+        let end = (layout.start_index + layout.visible_rows).min(state.menu_tracks().len());
         for (visible_index, track_index) in (layout.start_index..end).enumerate() {
-            let track = &state.audio_tracks[track_index];
+            let track = &state.menu_tracks()[track_index];
             let row_top = layout.row_top(visible_index).round();
             let row_bottom = (row_top + layout.row_height).round();
             let row_center = (row_top + layout.row_height * 0.5).round();
@@ -2081,7 +2116,7 @@ mod win32_render_surface {
                 14.0,
             );
         }
-        if end < state.audio_tracks.len() {
+        if end < state.menu_tracks().len() {
             let _ = text_renderer.draw(
                 "v",
                 panel_right - 24.0,
@@ -2823,7 +2858,7 @@ mod win32_render_surface {
                     audio_x,
                     audio_y,
                     AUDIO_BUTTON_DIAMETER,
-                    if state.audio_menu_open {
+                    if state.audio_menu_open && !state.subtitle_menu {
                         [0.22, 0.29, 0.16, 0.88]
                     } else {
                         [0.071, 0.071, 0.071, 0.52]
@@ -2838,6 +2873,12 @@ mod win32_render_surface {
                     [1.0, 1.0, 1.0, 0.98],
                 );
             }
+
+            let (sub_x, sub_y) = subtitle_button_center(width, height);
+            smooth_circle(&self.ui_textures, sub_x, sub_y, AUDIO_BUTTON_DIAMETER,
+                if state.audio_menu_open && state.subtitle_menu { [0.22, 0.29, 0.16, 0.88] }
+                else { [0.071, 0.071, 0.071, 0.52] });
+            textured_quad(self.ui_textures.subtitles, sub_x, sub_y, 25.0, 25.0, [1.0, 1.0, 1.0, 0.98]);
 
             // Fullscreen: stesso pulsante 52x52 e stessa icona 25x25 del WebView.
             let fullscreen_x = width - 54.0;
@@ -3331,52 +3372,66 @@ impl MpvApi {
 }
 
 fn audio_language_label(code: &str) -> Option<&'static str> {
-    match code.trim().to_ascii_lowercase().as_str() {
-        "it" | "ita" => Some("Italiano"),
-        "en" | "eng" => Some("English"),
-        "fr" | "fra" | "fre" => Some("Français"),
-        "de" | "deu" | "ger" => Some("Deutsch"),
-        "es" | "spa" => Some("Español"),
-        "pt" | "por" => Some("Português"),
-        "ja" | "jpn" => Some("Japanese"),
-        "ko" | "kor" => Some("Korean"),
-        "zh" | "zho" | "chi" => Some("Chinese"),
-        "ru" | "rus" => Some("Russian"),
+    let normalized = code.trim().to_lowercase();
+    match normalized.split(['-', '_']).next().unwrap_or("") {
+        "it" | "ita" | "italian" | "italiano" => Some("Italiano"),
+        "en" | "eng" | "english" | "inglese" => Some("Inglese"),
+        "fr" | "fra" | "fre" | "french" | "français" | "francese" => Some("Francese"),
+        "de" | "deu" | "ger" | "german" | "deutsch" | "tedesco" => Some("Tedesco"),
+        "es" | "spa" | "spanish" | "español" | "spagnolo" => Some("Spagnolo"),
+        "pt" | "por" | "portuguese" | "português" | "portoghese" => Some("Portoghese"),
+        "ja" | "jpn" | "japanese" | "giapponese" => Some("Giapponese"),
+        "ko" | "kor" | "korean" | "coreano" => Some("Coreano"),
+        "zh" | "zho" | "chi" | "chinese" | "cinese" => Some("Cinese"),
+        "ru" | "rus" | "russian" | "russo" => Some("Russo"),
+        "ar" | "ara" | "arabic" | "arabo" => Some("Arabo"),
+        "nl" | "nld" | "dut" | "dutch" | "olandese" => Some("Olandese"),
+        "pl" | "pol" | "polish" | "polacco" => Some("Polacco"),
+        "sv" | "swe" | "swedish" | "svedese" => Some("Svedese"),
+        "da" | "dan" | "danish" | "danese" => Some("Danese"),
+        "fi" | "fin" | "finnish" | "finlandese" => Some("Finlandese"),
+        "no" | "nor" | "norwegian" | "norvegese" => Some("Norvegese"),
+        "el" | "ell" | "gre" | "greek" | "greco" => Some("Greco"),
+        "tr" | "tur" | "turkish" | "turco" => Some("Turco"),
+        "hi" | "hin" | "hindi" => Some("Hindi"),
+        "uk" | "ukr" | "ukrainian" | "ucraino" => Some("Ucraino"),
+        "cs" | "ces" | "cze" | "czech" | "ceco" => Some("Ceco"),
+        "hu" | "hun" | "hungarian" | "ungherese" => Some("Ungherese"),
+        "ro" | "ron" | "rum" | "romanian" | "rumeno" => Some("Rumeno"),
+        "he" | "heb" | "hebrew" | "ebraico" => Some("Ebraico"),
+        "th" | "tha" | "thai" | "thailandese" => Some("Thailandese"),
         _ => None,
     }
 }
 
-fn sanitize_audio_track_label(value: &str) -> String {
-    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    let max_chars = 48usize;
-    if compact.chars().count() <= max_chars {
-        compact
-    } else {
-        let mut shortened = compact
-            .chars()
-            .take(max_chars.saturating_sub(3))
-            .collect::<String>();
-        shortened.push_str("...");
-        shortened
-    }
+fn track_language_label(language: Option<&str>, title: Option<&str>) -> String {
+    language.and_then(audio_language_label)
+        .or_else(|| title.and_then(|value| value.split(|c: char| !c.is_alphabetic()).find_map(audio_language_label)))
+        .unwrap_or("Lingua sconosciuta").to_string()
 }
 
 fn mpv_audio_tracks(api: &MpvApi, handle: *mut c_void) -> Vec<AudioTrackInfo> {
+    mpv_tracks(api, handle, "audio")
+}
+
+fn mpv_tracks(api: &MpvApi, handle: *mut c_void, kind: &str) -> Vec<AudioTrackInfo> {
     let count = api
         .get_property(handle, "track-list/count")
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(0)
         .min(128);
-    let selected_aid = api
-        .get_property(handle, "aid")
+    let selected_id = api
+        .get_property(handle, if kind == "sub" { "sid" } else { "aid" })
         .and_then(|value| value.parse::<i64>().ok());
     let mut tracks = Vec::new();
-
+    if kind == "sub" {
+        tracks.push(AudioTrackInfo { id: 0, label: "Disattivati".to_string(), selected: selected_id.is_none_or(|id| id <= 0) });
+    }
     for index in 0..count {
         let property = |suffix: &str| {
             api.get_property(handle, &format!("track-list/{index}/{suffix}"))
         };
-        if property("type").as_deref() != Some("audio") {
+        if property("type").as_deref() != Some(kind) {
             continue;
         }
         let Some(id) = property("id").and_then(|value| value.parse::<i64>().ok()) else {
@@ -3388,39 +3443,13 @@ fn mpv_audio_tracks(api: &MpvApi, handle: *mut c_void) -> Vec<AudioTrackInfo> {
         let lang = property("lang")
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
-        let codec = property("codec")
-            .map(|value| value.trim().to_ascii_uppercase())
-            .filter(|value| !value.is_empty());
         let selected = property("selected")
-            .is_some_and(|value| matches!(value.as_str(), "yes" | "true" | "1"))
-            || selected_aid == Some(id);
-
-        let ordinal = tracks.len() + 1;
-        let base = title.clone().unwrap_or_else(|| {
-            lang.as_deref()
-                .and_then(audio_language_label)
-                .map(str::to_string)
-                .or_else(|| lang.as_ref().map(|value| value.to_ascii_uppercase()))
-                .unwrap_or_else(|| format!("Traccia {ordinal}"))
-        });
-        let mut parts = vec![base];
-        if title.is_some() {
-            if let Some(lang) = lang.as_deref() {
-                let readable = audio_language_label(lang)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| lang.to_ascii_uppercase());
-                if !parts[0].to_ascii_lowercase().contains(&readable.to_ascii_lowercase()) {
-                    parts.push(readable);
-                }
-            }
-        }
-        if let Some(codec) = codec {
-            parts.push(codec);
-        }
+            .is_some_and(|value| matches!(value.as_str(), "yes" | "true" | "1")) || selected_id == Some(id);
+        let label = track_language_label(lang.as_deref(), title.as_deref());
 
         tracks.push(AudioTrackInfo {
             id,
-            label: sanitize_audio_track_label(&parts.join(" · ")),
+            label,
             selected,
         });
     }
@@ -3436,7 +3465,8 @@ fn sync_audio_tracks_to_ui(
 ) -> Vec<AudioTrackInfo> {
     let tracks = mpv_audio_tracks(api, handle);
     let selected = tracks.iter().find(|track| track.selected).map(|track| track.id);
-    render_shared.update(|ui| ui.set_audio_tracks(tracks.clone()));
+    let subtitles = mpv_tracks(api, handle, "sub");
+    render_shared.update(|ui| { ui.set_audio_tracks(tracks.clone()); ui.subtitle_tracks = subtitles; });
     diagnostic_log(format!(
         "native_player audio_tracks=refresh reason={} count={} selected={:?}",
         reason,
@@ -4615,6 +4645,7 @@ fn player_worker(
     let mut last_surface_seek_target: Option<f64> = None;
     let mut pending_surface_seek: Option<PendingSurfaceSeek> = None;
     let mut preferred_audio_track_id: Option<i64> = None;
+    let mut preferred_subtitle_track_id: Option<i64> = None;
     let mut audio_track_switches: u64 = 0;
 
     while running {
@@ -4651,6 +4682,7 @@ fn player_worker(
                     last_surface_seek_target = None;
                     pending_surface_seek = None;
                     preferred_audio_track_id = None;
+                    preferred_subtitle_track_id = None;
                     audio_track_switches = 0;
                     let intro_started = Instant::now();
                     let intro_visual_started = intro_started + PLAYBACK_INTRO_AUDIO_LEAD;
@@ -4671,6 +4703,8 @@ fn player_worker(
                         ui.controls_visible = true;
                         ui.controls_hide_at = None;
                         ui.audio_tracks.clear();
+                        ui.subtitle_tracks.clear();
+                        ui.subtitle_menu = false;
                         ui.audio_menu_open = false;
                         ui.audio_menu_hover = None;
                         ui.audio_menu_scroll = 0;
@@ -5091,6 +5125,15 @@ fn player_worker(
                         )),
                     }
                 }
+                SurfaceAction::SelectSubtitleTrack(track_id) => {
+                    let value = if track_id == 0 { "no".to_string() } else { track_id.to_string() };
+                    match api.set_property(handle, "sid", &value) {
+                        Ok(()) => preferred_subtitle_track_id = Some(track_id),
+                        Err(error) => diagnostic_log(format!("native_player subtitle_selection_error={error}")),
+                    }
+                    let subtitles = mpv_tracks(&api, handle, "sub");
+                    render_shared.update(|ui| ui.subtitle_tracks = subtitles);
+                }
                 SurfaceAction::SelectAudioTrack(track_id) => {
                     match api.set_property(handle, "aid", &track_id.to_string()) {
                         Ok(()) => {
@@ -5239,6 +5282,12 @@ fn player_worker(
                             "native_player audio_track=restored id={} reason=file_loaded",
                             track_id
                         ));
+                    }
+                }
+                if let Some(track_id) = preferred_subtitle_track_id {
+                    let value = if track_id == 0 { "no".to_string() } else { track_id.to_string() };
+                    if let Err(error) = api.set_property(handle, "sid", &value) {
+                        diagnostic_log(format!("native_player subtitle_restore_error={error}"));
                     }
                 }
                 let _ = sync_audio_tracks_to_ui(&api, handle, &render_shared, "file_loaded");
@@ -6324,11 +6373,49 @@ pub async fn baia_core_native_player_stop(
 
 #[cfg(test)]
 mod tests {
+    use super::{track_language_label, RenderUiState, AudioTrackInfo};
+    use std::time::Instant;
     use super::{
         clean_accent, configured_value, end_file_is_premature, parse_switch,
         NativePlaybackState, BACKEND_NAME, MPV_END_FILE_REASON_EOF,
         MPV_END_FILE_REASON_STOP, UI_NAME,
     };
+
+    #[test]
+    fn track_labels_use_only_italian_language_names() {
+        for (language, title, expected) in [
+            (Some("ita"), Some("AC3 5.1 English"), "Italiano"),
+            (Some("en-US"), None, "Inglese"),
+            (None, Some("ac3 5.1 ita"), "Italiano"),
+            (None, Some("english a3 3.3"), "Inglese"),
+            (Some("und"), Some("German DTS"), "Tedesco"),
+            (Some("fr_CA"), None, "Francese"),
+            (None, Some("AC3 5.1"), "Lingua sconosciuta"),
+        ] {
+            assert_eq!(track_language_label(language, title), expected);
+        }
+    }
+
+    #[test]
+    fn subtitle_and_audio_menus_are_exclusive_and_keep_controls_visible() {
+        let now = Instant::now();
+        let mut ui = RenderUiState::default();
+        ui.fullscreen = true;
+        ui.paused = false;
+        ui.audio_tracks = vec![AudioTrackInfo { id: 1, label: "Italiano".into(), selected: true }];
+        ui.subtitle_tracks = vec![AudioTrackInfo { id: 0, label: "Disattivati".into(), selected: true }];
+        ui.toggle_subtitle_menu(now);
+        assert!(ui.audio_menu_open && ui.subtitle_menu);
+        assert!(!ui.controls_can_auto_hide());
+        assert_eq!(ui.menu_tracks()[0].id, 0);
+        ui.toggle_audio_menu(now);
+        assert!(ui.audio_menu_open && !ui.subtitle_menu);
+        assert_eq!(ui.menu_tracks()[0].id, 1);
+        ui.toggle_subtitle_menu(now);
+        ui.toggle_subtitle_menu(now);
+        assert!(!ui.audio_menu_open);
+        assert!(ui.controls_can_auto_hide());
+    }
 
     #[test]
     fn embedded_backend_is_explicitly_libmpv() {

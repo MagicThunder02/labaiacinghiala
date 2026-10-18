@@ -1493,6 +1493,22 @@
   });
   window.addEventListener('beforeunload', () => window.BaiaPage.shellImmersive(false));
 
+  window.BaiaPage.setHardwareBackHandler?.(() => {
+    if (state.readerItem && !elements.readerView.hidden) {
+      closeReader();
+      return true;
+    }
+    if (!elements.filtersPanel.hidden) {
+      closeFiltersPanel();
+      return true;
+    }
+    if (state.mode === 'search') {
+      exitSearchMode().catch(handleError);
+      return true;
+    }
+    return false;
+  });
+
   setBrowseMode('home');
   Promise.all([loadHome(), loadFilters()]).catch((error) => window.BaiaPage.shellToast(`${categoryLabel}: ${error.message}`));
 })();

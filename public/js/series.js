@@ -1520,5 +1520,25 @@ window.visualViewport?.addEventListener('scroll', syncSeriesViewport, { passive:
 touchLayoutMedia.addEventListener?.('change', syncSeriesViewport);
 restorePlayerSettings();
 syncSeriesViewport();
+window.BaiaPage.setHardwareBackHandler?.(() => {
+  if (!elements.playerView.hidden) {
+    closePlayer().catch(handleError);
+    return true;
+  }
+  if (!elements.detail.hidden) {
+    closeDetails();
+    return true;
+  }
+  if (!elements.filtersPanel.hidden) {
+    closeFiltersPanel();
+    return true;
+  }
+  if (state.mode === 'search') {
+    exitSearchMode().catch(handleError);
+    return true;
+  }
+  return false;
+});
+
 setBrowseMode('home');
 Promise.all([loadHome(), loadFilters()]).catch(handleError);

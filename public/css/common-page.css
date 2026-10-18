@@ -16,11 +16,6 @@
   --cover-hover-glow: 0 0 18px 6px rgba(255, 255, 255, .88);
 }
 * { box-sizing: border-box; }
-
-/* La pagina resta scrollabile con rotella/trackpad, ma senza la barra verticale laterale. */
-html, body { scrollbar-width: none; -ms-overflow-style: none; }
-html::-webkit-scrollbar, body::-webkit-scrollbar { width: 0; height: 0; display: none; }
-
 html, body { min-height: 100%; }
 body {
   margin: 0;
@@ -322,4 +317,29 @@ button { color: inherit; }
 }
 @media (max-width: 720px) {
   :root { --utility-header-height: 68px; }
+}
+
+/* ============================================================
+   ANDROID — preserva gli elementi sticky della UI desktop
+   Rinforzo di compositing per le testate/tab già sticky nel layout desktop.
+   ============================================================ */
+html.baia-android body:not(.film-search-open) .films-header,
+html.baia-android .page > .page-header,
+html.baia-android .metadata-header {
+  position: -webkit-sticky !important;
+  position: sticky !important;
+  top: 0 !important;
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+html.baia-android .manager-tabs,
+html.baia-android .category-tabs {
+  position: -webkit-sticky !important;
+  position: sticky !important;
+  top: calc(var(--utility-header-height) + 12px) !important;
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  will-change: transform;
 }

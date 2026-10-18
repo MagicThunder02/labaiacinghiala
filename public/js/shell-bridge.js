@@ -1,4 +1,40 @@
+document.documentElement.classList.toggle('baia-android', /Android/i.test(navigator.userAgent));
 document.documentElement.classList.toggle('baia-shell-embedded', window.parent !== window);
+/* Android WebView: su alcune build position:sticky perde l'ancoraggio quando
+   backdrop-filter e iframe vengono compositati insieme. Per le pagine media
+   misuriamo la testata reale e la trattiamo come fixed, lasciando nello flow
+   uno spacer della stessa altezza. Il desktop continua a usare sticky. */
+function initAndroidMediaStickyHeader() {
+  if (!document.documentElement.classList.contains('baia-android')) return;
+
+  const browse = document.querySelector('.films-browse-view');
+  const header = browse?.querySelector(':scope > .films-header');
+  if (!(browse instanceof HTMLElement) || !(header instanceof HTMLElement)) return;
+
+  const sync = () => {
+    const height = Math.max(0, Math.ceil(header.getBoundingClientRect().height));
+    if (height > 0) browse.style.setProperty('--baia-android-sticky-header-height', `${height}px`);
+  };
+
+  requestAnimationFrame(sync);
+  setTimeout(sync, 80);
+  setTimeout(sync, 280);
+
+  if ('ResizeObserver' in window) {
+    const observer = new ResizeObserver(sync);
+    observer.observe(header);
+  }
+
+  window.addEventListener('resize', sync, { passive: true });
+  window.visualViewport?.addEventListener('resize', sync, { passive: true });
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initAndroidMediaStickyHeader, { once: true });
+} else {
+  initAndroidMediaStickyHeader();
+}
+
 function shellToast(message) {
   if (window.parent !== window) {
     window.parent.postMessage({ type: 'shell-toast', message }, window.location.origin);
@@ -81,6 +117,21 @@ function shellAccountSignedOut() {
 function shellShowAccountGate() {
   if (window.parent !== window) {
     window.parent.postMessage({ type: 'shell-show-account-gate' }, window.location.origin);
+  }
+}
+let hardwareBackHandler = null;
+
+function setHardwareBackHandler(handler) {
+  hardwareBackHandler = typeof handler === 'function' ? handler : null;
+}
+
+function handleHardwareBack() {
+  if (!hardwareBackHandler) return false;
+  try {
+    return Boolean(hardwareBackHandler());
+  } catch (error) {
+    console.error(error);
+    return false;
   }
 }
 function reportAccountFailure(payload, status) {
@@ -182,6 +233,8 @@ window.BaiaPage = {
   shellAccountRefresh,
   shellAccountSignedOut,
   shellShowAccountGate,
+  setHardwareBackHandler,
+  handleHardwareBack,
   reportAccountFailure,
   reportAccountAuthFailure,
   apiUrl,

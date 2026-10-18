@@ -1464,6 +1464,29 @@
     }
   });
 
+
+  window.BaiaPage.setHardwareBackHandler?.(() => {
+    if (elements.playlistEditorDialog?.open) {
+      closeDialog(elements.playlistEditorDialog);
+      return true;
+    }
+    if (elements.addToPlaylistDialog?.open) {
+      closeDialog(elements.addToPlaylistDialog);
+      state.pendingPlaylistTrack = null;
+      return true;
+    }
+    const detailOpen = !elements.albumDetailView.hidden || !elements.artistDetailView.hidden || !elements.playlistDetailView.hidden;
+    if (detailOpen) {
+      returnFromDetail();
+      return true;
+    }
+    if (state.mode === 'search' || elements.searchInput.value) {
+      clearSearch();
+      return true;
+    }
+    return false;
+  });
+
   const initialPlayerState = window.BaiaPage.shellMusicRequestState();
   if (initialPlayerState) state.player = initialPlayerState;
 

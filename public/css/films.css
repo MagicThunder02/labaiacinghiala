@@ -272,16 +272,6 @@ button, input { font: inherit; }
   grid-template-columns: repeat(auto-fill, minmax(clamp(138px, 14vw, 190px), 1fr));
   gap: clamp(16px, 2vw, 27px) clamp(12px, 1.7vw, 22px);
 }
-
-/* Random picks: mini-catalogo a griglia, non un rail orizzontale. */
-.random-picks-section { margin-top: 48px; }
-.random-picks-grid.poster-grid {
-  grid-template-columns: repeat(auto-fill, minmax(clamp(112px, 10vw, 150px), 1fr));
-  gap: clamp(14px, 1.6vw, 22px) clamp(10px, 1.2vw, 16px);
-  align-items: start;
-}
-.random-picks-grid .poster-card { max-width: 168px; width: 100%; }
-
 .poster-card { min-width: 0; scroll-snap-align: start; }
 .poster-card-button {
   display: block;
@@ -3533,9 +3523,11 @@ html.baia-shell-embedded .film-player-view:fullscreen .player-back-button {
   }
 
   .showcase-shell > .rail-arrow {
-    position: relative;
-    z-index: auto !important;
-    isolation: auto !important;
+    /* Il pad resta sovrapposto al rail. Con position: relative rientrava nel
+       flusso e generava una falsa riga vuota alta quanto la copertina. */
+    position: absolute;
+    z-index: 25 !important;
+    isolation: isolate !important;
     overflow: hidden;
     background: transparent !important;
     -webkit-backdrop-filter: none !important;
@@ -3766,5 +3758,122 @@ html.baia-shell-embedded .film-player-view:fullscreen .player-back-button {
 @media (hover: none) and (pointer: coarse) and (max-width: 800px) {
   .film-filters-panel {
     top: calc(68px + max(12px, env(safe-area-inset-top, 0px)));
+  }
+}
+
+/* ============================================================
+   ANDROID V6 — testata media ancorata + filtri allineati
+   Film, Serie, Libri, Fumetti, Manga e Musica condividono .films-header.
+   Su Android WebView usiamo fixed invece di sticky, preservando lo spazio
+   occupato dalla testata tramite la misura impostata da shell-bridge.js.
+   ============================================================ */
+html.baia-android .films-browse-view {
+  padding-top: var(--baia-android-sticky-header-height, 86px);
+}
+
+html.baia-android body:not(.film-search-open) .films-browse-view > .films-header {
+  position: fixed !important;
+  z-index: 95 !important;
+  top: 0 !important;
+  left: max(16px, env(safe-area-inset-left, 0px)) !important;
+  right: max(16px, env(safe-area-inset-right, 0px)) !important;
+  width: auto !important;
+  margin: 0 !important;
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+/* Durante la ricerca il body e' gia' bloccato e la ricerca usa il proprio
+   overlay fixed. Ripristiniamo la testata nel flow per non duplicare i layer. */
+html.baia-android body.film-search-open .films-browse-view {
+  padding-top: 0 !important;
+}
+html.baia-android body.film-search-open .films-browse-view > .films-header {
+  position: relative !important;
+  top: auto !important;
+  left: auto !important;
+  right: auto !important;
+  width: auto !important;
+  margin: 0 !important;
+  -webkit-transform: none;
+  transform: none;
+  will-change: auto;
+}
+
+/* Il pannello Filtri deve iniziare alla stessa quota verticale del drawer
+   della shell anche sui tablet Android (>800px), non soltanto sui telefoni. */
+html.baia-android .film-filters-panel {
+  position: fixed !important;
+  top: calc(68px + 12px) !important;
+  right: max(16px, env(safe-area-inset-right, 0px)) !important;
+  left: auto !important;
+  width: min(360px, calc(100vw - 32px)) !important;
+  max-height: calc(100dvh - 96px) !important;
+}
+
+@media (max-width: 800px) {
+  html.baia-android .film-filters-panel {
+    right: max(16px, env(safe-area-inset-right, 0px)) !important;
+    left: max(16px, env(safe-area-inset-left, 0px)) !important;
+    width: auto !important;
+  }
+}
+
+/* Android touch: Film e Serie non mostrano caption/nome sopra alle cover.
+   Libri/Manga/Fumetti e Musica mantengono il proprio comportamento. */
+html.baia-android .films-page:not(.reading-page):not(.music-page) .poster-shade,
+html.baia-android .films-page:not(.reading-page):not(.music-page) .poster-caption {
+  display: none !important;
+}
+
+/* Loader video Android: evita il placeholder grigio/play nativo della WebView
+   mentre il player sta aspettando i primi frame. */
+html.baia-android .player-stage.player-is-loading video {
+  visibility: hidden !important;
+}
+html.baia-android .player-stage.player-is-loading .player-loading-overlay {
+  background: #000 !important;
+}
+
+
+/* ============================================================
+   ANDROID V7 — filtri allineati al drawer SENZA spostare il drawer.
+   Replica la quota touch della shell: 68px + max(12px, safe-area top).
+   ============================================================ */
+html.baia-android .film-filters-panel {
+  top: calc(68px + max(12px, env(safe-area-inset-top, 0px))) !important;
+}
+
+/* ============================================================
+   ANDROID V7 — transizione loader -> primo frame senza flash.
+   Durante il caricamento normale il video può rimanere visibile; solo
+   prima del PRIMO frame viene nascosto esplicitamente. Il loader nero
+   resta sopra fino al paint successivo al frame consegnato al compositor.
+   ============================================================ */
+html.baia-android .player-stage.player-is-loading video {
+  visibility: visible !important;
+}
+html.baia-android .player-stage.player-awaiting-first-frame video {
+  visibility: hidden !important;
+}
+html.baia-android .player-stage.player-is-loading .player-loading-overlay {
+  background: #000 !important;
+}
+
+/* ============================================================
+   ANDROID V9 — filtri alla stessa quota del drawer desktop
+   ------------------------------------------------------------
+   Questa quota evita il salto iniziale prima che il bridge nativo misuri
+   il drawer; dopo il primo sync la misura reale continua ad avere priorita'.
+   ============================================================ */
+@media (min-width: 721px) {
+  html.baia-android .film-filters-panel {
+    top: 100px !important; /* 86px topbar desktop + 14px gap */
+  }
+}
+@media (min-width: 721px) and (max-height: 900px) {
+  html.baia-android .film-filters-panel {
+    top: 86px !important; /* 72px topbar desktop + 14px gap */
   }
 }

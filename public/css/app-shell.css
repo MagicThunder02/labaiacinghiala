@@ -2956,6 +2956,7 @@ html.baia-android .shell-context-back:active {
   box-shadow: none;
   outline: none;
 }
+
 @media (max-width: 720px) {
   .shell-topbar-left { gap: 8px; }
   .shell-context-back {
@@ -3287,3 +3288,95 @@ html.baia-native-app .app-intro[hidden] {
   .playback-intro.is-active .app-intro-wordmark { transform: translate(-50%, 0) scale(1); }
 }
 /* === /BAIA PLAYBACK INTRO === */
+
+/* ============================================================
+   ANDROID V6 — shell topbar sempre ancorata alla viewport
+   ============================================================ */
+html.baia-android .shell-topbar {
+  position: fixed !important;
+  z-index: 1250 !important;
+  top: 0 !important;
+  right: 0 !important;
+  left: 0 !important;
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  will-change: transform;
+}
+html.baia-android body.drawer-open .shell-topbar { z-index: 1300 !important; }
+
+
+/* ============================================================
+   ANDROID V7 — profilo centrato geometricamente nella topbar.
+   Non modifica posizione o geometria del drawer.
+   ============================================================ */
+html.baia-android .shell-profile-button {
+  position: absolute !important;
+  top: 50% !important;
+  right: max(var(--baia-edge-gutter, 16px), env(safe-area-inset-right, 0px)) !important;
+  margin: 0 !important;
+  transform: translateY(-50%) !important;
+}
+
+/* ============================================================
+   ANDROID V9 — tablet: geometria shell identica al desktop
+   ------------------------------------------------------------
+   Sui tablet Android non usiamo la geometria touch compatta: topbar,
+   drawer e avatar seguono le stesse quote del desktop. I telefoni
+   continuano invece a usare il layout touch esistente.
+   ============================================================ */
+@media (min-width: 721px) {
+  html.baia-android {
+    --sidebar-width: 252px;
+    --topbar-height: 86px;
+    --baia-drawer-vertical-gap: 14px;
+  }
+
+  html.baia-android .shell-topbar {
+    height: var(--topbar-height) !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    align-items: center !important;
+  }
+
+  /* Annulla il posizionamento assoluto introdotto dalla V7: come sul desktop
+     l'avatar e' un normale figlio flex della topbar e viene centrato da essa. */
+  html.baia-android .shell-profile-button {
+    position: static !important;
+    top: auto !important;
+    right: auto !important;
+    bottom: auto !important;
+    margin: 0 !important;
+    transform: none !important;
+    align-self: center !important;
+    width: 42px;
+    height: 42px;
+  }
+  html.baia-android .shell-profile-button .profile-avatar {
+    width: 38px;
+    height: 38px;
+    flex-basis: 38px;
+  }
+
+  html.baia-android .sidebar,
+  html.baia-android .sidebar:hover,
+  html.baia-android .sidebar:focus-within,
+  html.baia-android body.force-sidebar-open .sidebar {
+    top: calc(var(--topbar-height) + var(--baia-drawer-vertical-gap)) !important;
+    left: 14px !important;
+    width: var(--sidebar-width) !important;
+    padding: 10px 8px !important;
+    border-radius: 18px !important;
+  }
+
+  html.baia-android .menu-button,
+  html.baia-android .menu-group-items .menu-button {
+    min-height: 43px;
+  }
+}
+
+/* Stessa variante desktop per finestre basse. */
+@media (min-width: 721px) and (max-height: 900px) {
+  html.baia-android {
+    --topbar-height: 72px;
+  }
+}

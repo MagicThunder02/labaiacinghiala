@@ -1,5 +1,8 @@
+document.documentElement.classList.toggle('baia-android', /Android/i.test(navigator.userAgent));
 const frames = new Map();
 const pageById = new Map();
+const pageHistory = [];
+const PAGE_HISTORY_LIMIT = 48;
 const STORAGE_PAGE = 'baiaCinghialaCurrentPage';
 const STORAGE_GROUPS = 'baiaCinghialaOpenGroups';
 const TOUCH_LAYOUT_QUERY = '(hover: none) and (pointer: coarse)';
@@ -1457,7 +1460,7 @@ function setActiveState(pageId) {
   saveGroups();
 }
 
-function openPage(pageId, { allowUnauthenticated = false, silent = false } = {}) {
+function openPage(pageId, { allowUnauthenticated = false, silent = false, recordHistory = true } = {}) {
   const page = pageById.get(pageId);
   if (!page) return false;
   if (!canAccessPage(page, { allowUnauthenticated })) {
@@ -1465,6 +1468,11 @@ function openPage(pageId, { allowUnauthenticated = false, silent = false } = {})
     return false;
   }
   document.body.classList.remove('immersive-page');
+  const previousPageId = currentPageId;
+  if (recordHistory && previousPageId && previousPageId !== pageId) {
+    if (pageHistory[pageHistory.length - 1] !== previousPageId) pageHistory.push(previousPageId);
+    if (pageHistory.length > PAGE_HISTORY_LIMIT) pageHistory.splice(0, pageHistory.length - PAGE_HISTORY_LIMIT);
+  }
   const previousFrame = frames.get(currentPageId);
   if (previousFrame && previousFrame.contentWindow) {
     previousFrame.contentWindow.postMessage({ type: 'shell-page-visibility', active: false }, window.location.origin);
@@ -1498,6 +1506,68 @@ function openPage(pageId, { allowUnauthenticated = false, silent = false } = {})
 
   if (elements.sidebar.classList.contains('is-open')) setSidebarOpen(false);
   return true;
+}
+
+
+function frameHandlesHardwareBack() {
+  const frame = frames.get(currentPageId);
+  if (!frame?.contentWindow) return false;
+  try {
+    return Boolean(frame.contentWindow.BaiaPage?.handleHardwareBack?.());
+  } catch (error) {
+    console.error(error);
+    return false;
+  }
+}
+
+function openPreviousShellPage() {
+  while (pageHistory.length) {
+    const pageId = pageHistory.pop();
+    const page = pageById.get(pageId);
+    if (!page || pageId === currentPageId || !canAccessPage(page)) continue;
+    return openPage(pageId, { recordHistory: false });
+  }
+  return false;
+}
+
+function handleHardwareBack() {
+  if (elements.sidebar.classList.contains('is-open')) {
+    setSidebarOpen(false);
+    return true;
+  }
+
+  if (elements.userMenu && !elements.userMenu.hidden) {
+    elements.userMenu.hidden = true;
+    elements.profileMenuButton?.setAttribute('aria-expanded', 'false');
+    return true;
+  }
+
+  if (elements.musicFullMenu && !elements.musicFullMenu.hidden) {
+    closeMusicFullMenu();
+    return true;
+  }
+
+  if (elements.musicQueuePanel && !elements.musicQueuePanel.hidden) {
+    closeMusicQueue();
+    return true;
+  }
+
+  if (musicFullPlayerOpen) {
+    setMusicFullPlayerOpen(false);
+    return true;
+  }
+
+  if (elements.shellContextBack && !elements.shellContextBack.hidden) {
+    const frame = frames.get(currentPageId);
+    frame?.contentWindow?.postMessage(
+      { type: 'shell-context-back-request' },
+      window.location.origin,
+    );
+    return true;
+  }
+
+  if (frameHandlesHardwareBack()) return true;
+  return openPreviousShellPage();
 }
 
 function showToast(message) {
@@ -2059,6 +2129,7 @@ window.addEventListener('pagehide', () => {
 
 window.BaiaShell = Object.freeze({
   openPage,
+  handleHardwareBack,
   showToast,
   refreshAccount: refreshAccountState,
   musicPlayQueue,

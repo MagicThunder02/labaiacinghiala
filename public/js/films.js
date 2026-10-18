@@ -1513,6 +1513,25 @@ async function startPlayback({ restart = false } = {}) {
   const movie = state.activeMovie;
   if (!movie) return;
 
+  const requestId = ++state.playbackRequestId;
+  const isAndroidNativeRuntime = document.documentElement.classList.contains('baia-android')
+    || /\bAndroid\b/i.test(navigator.userAgent);
+
+  // Windows disegna l'intro direttamente nel compositor nativo. Su Android il
+  // player libmpv e' un overlay Android separato: se lo aprissimo subito
+  // coprirebbe l'animazione della shell. Mostriamo quindi PRIMA la stessa intro
+  // Baia della WebView e solo al termine montiamo la surface nativa.
+  let androidIntroResult = null;
+  if (isAndroidNativeRuntime) {
+    state.playbackGateOpen = false;
+    androidIntroResult = await Promise.resolve(window.BaiaPage.shellPlaybackIntro?.()).catch((error) => {
+      console.warn('Intro playback Android non disponibile.', error);
+      return { shown: false, cancelled: false, durationMs: 0 };
+    });
+    if (requestId !== state.playbackRequestId) return;
+    state.playbackGateOpen = true;
+  }
+
   const nativePlayback = await window.BaiaApi.tryOpenNativeVideoPlayer(movie.id, {
     title: movie.title,
     meta: movieMeta(movie),
@@ -1522,6 +1541,12 @@ async function startPlayback({ restart = false } = {}) {
     // gestite dal compositor e vengono persistite dal monitor di playback.
     volume: 100,
   });
+  if (requestId !== state.playbackRequestId) {
+    if (nativePlayback.used) {
+      try { await window.BaiaApi.stopNativeVideoPlayer(); } catch {}
+    }
+    return;
+  }
   if (nativePlayback.used) {
     resetProgressTracking(movie);
     enterNativePlayerUi(movie, { restart });
@@ -1529,12 +1554,23 @@ async function startPlayback({ restart = false } = {}) {
     return;
   }
 
-  const requestId = ++state.playbackRequestId;
+  // Android deve usare sempre il player nativo libmpv. Non mascheriamo un
+  // errore JNI/Surface tornando al vecchio <video> WebView: in questo modo una
+  // regressione del backend nativo resta visibile e diagnosticabile.
+  if (isAndroidNativeRuntime) {
+    const detail = nativePlayback?.error?.message
+      || nativePlayback?.status?.detail
+      || 'backend libmpv Android non disponibile';
+    throw new Error(`Player nativo Android non avviato: ${detail}`);
+  }
+
   state.playbackGateOpen = false;
-  const introPromise = Promise.resolve(window.BaiaPage.shellPlaybackIntro?.()).catch((error) => {
-    console.warn('Intro playback non disponibile.', error);
-    return { shown: false, cancelled: false, durationMs: 0 };
-  });
+  const introPromise = isAndroidNativeRuntime
+    ? Promise.resolve(androidIntroResult || { shown: false, cancelled: false, durationMs: 0 })
+    : Promise.resolve(window.BaiaPage.shellPlaybackIntro?.()).catch((error) => {
+      console.warn('Intro playback non disponibile.', error);
+      return { shown: false, cancelled: false, durationMs: 0 };
+    });
 
   let introDone = false;
   let metadataReady = false;
@@ -2062,7 +2098,7 @@ window.addEventListener('message', (event) => {
     return;
   }
   if (event.data?.type === 'shell-context-back-request') {
-    if (!elements.playerView.hidden) closePlayer().catch(handleError);
+    if (state.nativeUiActive || !elements.playerView.hidden) closePlayer().catch(handleError);
     else if (!elements.detailView.hidden) returnToBrowse().catch(handleError);
     return;
   }
@@ -2085,6 +2121,26 @@ window.addEventListener('message', (event) => {
       loadFilters(),
     ]).catch(handleError);
   }
+});
+
+window.BaiaPage.setHardwareBackHandler?.(() => {
+  if (state.nativeUiActive || !elements.playerView.hidden) {
+    closePlayer().catch(handleError);
+    return true;
+  }
+  if (!elements.detailView.hidden) {
+    returnToBrowse().catch(handleError);
+    return true;
+  }
+  if (!elements.filtersPanel.hidden) {
+    closeFiltersPanel();
+    return true;
+  }
+  if (state.mode === 'search') {
+    exitSearchMode().catch(handleError);
+    return true;
+  }
+  return false;
 });
 
 Promise.all([loadFilters(), loadHome()])
